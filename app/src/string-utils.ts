@@ -24,7 +24,7 @@ export function humanize(value: unknown): string {
 export function titleize(value: unknown): string {
   return text(value)
     .toLowerCase()
-    .replace(/(?:^|\s|-)\S/g, character => character.toUpperCase());
+    .replace(/(?:^|\s|-)\S/g, (character) => character.toUpperCase());
 }
 
 export function dasherize(value: unknown): string {
@@ -49,7 +49,7 @@ export function escapeHTML(value: unknown): string {
     '&': 'amp',
     "'": '#39',
   };
-  return text(value).replace(/[¢£¥€©®<>"&']/g, character => `&${entities[character]};`);
+  return text(value).replace(/[¢£¥€©®<>"&']/g, (character) => `&${entities[character]};`);
 }
 
 export default { capitalize, humanize, titleize, dasherize, escapeHTML };
