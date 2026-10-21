@@ -3,7 +3,7 @@ import classnames from 'classnames';
 import React from 'react';
 import { localized, Actions, Contact } from 'mailspring-exports';
 
-const { Menu, MenuItem } = require('@electron/remote');
+const { Menu, MenuItem, clipboard } = require('@electron/remote');
 const MAX_COLLAPSED = 5;
 
 interface MessageParticipantsProps {
@@ -32,7 +32,7 @@ export default class MessageParticipants extends React.Component<MessageParticip
     return _.union(this.props.to, this.props.cc, this.props.bcc);
   }
 
-  _shortNames(contacts = [], max = MAX_COLLAPSED) {
+  _shortNames(contacts: Contact[] = [], max = MAX_COLLAPSED) {
     let names = contacts.map((c, i) => (
       <span key={`contact-${i}`}>
         {i > 0 && ', '}
@@ -54,11 +54,11 @@ export default class MessageParticipants extends React.Component<MessageParticip
     return names;
   }
 
-  _onSelectText = e => {
+  _onSelectText = (e: React.MouseEvent<HTMLElement>) => {
     e.preventDefault();
     e.stopPropagation();
 
-    const textNode = e.currentTarget.childNodes[0];
+    const textNode = e.currentTarget.childNodes[0] as Text;
     const range = document.createRange();
     range.setStart(textNode, 0);
     range.setEnd(textNode, textNode.length);
@@ -67,14 +67,14 @@ export default class MessageParticipants extends React.Component<MessageParticip
     selection.addRange(range);
   };
 
-  _onContactContextMenu = contact => {
+  _onContactContextMenu = (contact: Contact) => {
     const menu = new Menu();
     menu.append(
       window.getSelection()?.type == 'Range'
         ? new MenuItem({ role: 'copy' })
         : new MenuItem({
             label: `${localized(`Copy`)} "${contact.email}"`,
-            click: () => navigator.clipboard.writeText(contact.email),
+            click: () => clipboard.writeText(contact.email),
           })
     );
     menu.append(
@@ -86,7 +86,7 @@ export default class MessageParticipants extends React.Component<MessageParticip
     menu.popup({});
   };
 
-  _renderFullContacts(contacts = []) {
+  _renderFullContacts(contacts: Contact[] = []) {
     return contacts.map((c, i) => {
       let comma = ',';
       if (contacts.length === 1 || i === contacts.length - 1) {
@@ -129,7 +129,12 @@ export default class MessageParticipants extends React.Component<MessageParticip
     });
   }
 
-  _renderExpandedField(name, label, field, { includeLabel = true } = {}) {
+  _renderExpandedField(
+    name: string,
+    label: string,
+    field: Contact[],
+    { includeLabel = true } = {}
+  ) {
     return (
       <div className="participant-type" key={`participant-type-${name}`}>
         {includeLabel ? (

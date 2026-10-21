@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom';
-import { localized, PropTypes, Actions, Message, Thread } from 'mailspring-exports';
+import { localized, Actions, Message, Thread } from 'mailspring-exports';
 import { RetinaImg } from 'mailspring-component-kit';
 import OpenTrackingMessagePopover from './open-tracking-message-popover';
 import { PLUGIN_ID } from './open-tracking-constants';
@@ -9,10 +9,6 @@ export default class OpenTrackingIcon extends React.Component<{
   thread: Thread & { __messages: Message[] };
 }> {
   static displayName = 'OpenTrackingIcon';
-
-  static propTypes = {
-    thread: PropTypes.object.isRequired,
-  };
 
   onMouseDown = () => {
     const rect = (ReactDOM.findDOMNode(this) as HTMLElement).getBoundingClientRect();
@@ -67,14 +63,28 @@ export default class OpenTrackingIcon extends React.Component<{
       : localized('This message has not been opened');
     return (
       <div
+        role={opened ? 'button' : undefined}
+        tabIndex={opened ? 0 : undefined}
         title={title}
+        aria-label={title}
         className="open-tracking-icon"
         onMouseDown={opened ? this.onMouseDown : null}
+        onKeyDown={
+          opened
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  this.onMouseDown();
+                }
+              }
+            : undefined
+        }
       >
         <RetinaImg
           className={opened ? 'opened' : 'unopened'}
           url="mailspring://open-tracking/assets/icon-tracking-opened@2x.png"
           mode={RetinaImg.Mode.ContentIsMask}
+          aria-hidden="true"
         />
       </div>
     );

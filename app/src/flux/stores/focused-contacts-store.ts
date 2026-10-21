@@ -6,6 +6,7 @@ import * as Utils from '../models/utils';
 import { Thread } from '../models/thread';
 import * as Actions from '../actions';
 import { Contact } from '../models/contact';
+import { Message } from '../models/message';
 import { MessageStore } from './message-store';
 import { AccountStore } from './account-store';
 import DatabaseStore from './database-store';
@@ -62,8 +63,12 @@ class FocusedContactsStore extends MailspringStore {
   // For now we take the last message
   _populateCurrentParticipants() {
     this._scoreAllParticipants();
-    const sorted = _.sortBy(Object.values(this._contactScores), 'score').reverse();
-    this._currentContacts = sorted.map(obj => obj.contact);
+    // Sort ascending then reverse to match the tie-breaking behavior of
+    // _.sortBy().reverse() — ties appear in reverse insertion order.
+    const sorted = Object.values(this._contactScores)
+      .sort((a, b) => a.score - b.score)
+      .reverse();
+    this._currentContacts = sorted.map((obj) => obj.contact);
     return this._onFocusContact(this._currentContacts[0]);
   }
 
@@ -79,7 +84,7 @@ class FocusedContactsStore extends MailspringStore {
     this._currentThread = null;
   }
 
-  _onFocusContact = contact => {
+  _onFocusContact = (contact: Contact | null) => {
     if (this._unsubFocusedContact) {
       this._unsubFocusedContact.dispose();
       this._unsubFocusedContact = null;
@@ -90,7 +95,7 @@ class FocusedContactsStore extends MailspringStore {
         accountId: this._currentThread.accountId,
         email: contact.email,
       });
-      this._unsubFocusedContact = Rx.Observable.fromQuery(query).subscribe(match => {
+      this._unsubFocusedContact = Rx.Observable.fromQuery(query).subscribe((match) => {
         if (match) {
           match.name = contact.name; // always show the name from the current email
         }
@@ -106,10 +111,21 @@ class FocusedContactsStore extends MailspringStore {
   // We score everyone to determine who's the most relevant to display in
   // the sidebar.
   _scoreAllParticipants() {
-    const score = (message, msgNum, field, multiplier) => {
+    // Cache account info once for penalty calculations
+    const accountId = this._currentThread && this._currentThread.accountId;
+    const account = AccountStore.accountForId(accountId);
+    const myEmail = account ? account.emailAddress : undefined;
+    const myEmailIsCommonDomain = Utils.emailHasCommonDomain(myEmail);
+
+    const score = (message: Message, msgNum: number, field: string, multiplier: number) => {
       (message[field] || []).forEach((contact, j) => {
         const bonus = message[field].length - j;
-        this._assignScore(contact, (msgNum + 1) * multiplier + bonus);
+        this._assignScore(
+          contact,
+          (msgNum + 1) * multiplier + bonus,
+          myEmail,
+          myEmailIsCommonDomain
+        );
       });
     };
 
@@ -130,7 +146,7 @@ class FocusedContactsStore extends MailspringStore {
   }
 
   // Self always gets a score of 0
-  _assignScore(contact, score = 0) {
+  _assignScore(contact: Contact, score = 0, myEmail?: string, myEmailIsCommonDomain?: boolean) {
     if (!contact || !contact.email) {
       return;
     }
@@ -143,27 +159,26 @@ class FocusedContactsStore extends MailspringStore {
     if (!this._contactScores[key]) {
       this._contactScores[key] = {
         contact: contact,
-        score: score - this._calculatePenalties(contact, score),
+        score: score - this._calculatePenalties(contact, score, myEmail, myEmailIsCommonDomain),
       };
     }
   }
 
-  _calculatePenalties(contact, score) {
+  _calculatePenalties(
+    contact: Contact,
+    score: number,
+    myEmail?: string,
+    myEmailIsCommonDomain?: boolean
+  ) {
     let penalties = 0;
     const email = contact.email.toLowerCase().trim();
-
-    const accountId = this._currentThread && this._currentThread.accountId;
-    const account = AccountStore.accountForId(accountId);
-    const myEmail = account ? account.emailAddress : undefined;
 
     if (email === myEmail) {
       // The whole thing which will penalize to zero
       penalties += score;
     }
 
-    const notCommonDomain = !Utils.emailHasCommonDomain(myEmail);
-    const sameDomain = Utils.emailsHaveSameDomain(myEmail, email);
-    if (notCommonDomain && sameDomain) {
+    if (!myEmailIsCommonDomain && Utils.emailsHaveSameDomain(myEmail, email)) {
       penalties += score * 0.9;
     }
 

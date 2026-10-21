@@ -1,5 +1,4 @@
 import React, { Component } from 'react';
-import PropTypes from 'prop-types';
 import ReactDOM from 'react-dom';
 import { localized, Actions, Message, DraftEditingSession } from 'mailspring-exports';
 import { RetinaImg } from 'mailspring-component-kit';
@@ -24,11 +23,6 @@ export default class SendRemindersComposerButton extends Component<
 
   static containerRequired = false;
 
-  static propTypes = {
-    draft: PropTypes.object.isRequired,
-    session: PropTypes.object.isRequired,
-  };
-
   constructor(props) {
     super(props);
     this.state = {
@@ -36,17 +30,17 @@ export default class SendRemindersComposerButton extends Component<
     };
   }
 
-  componentWillReceiveProps() {
-    if (this.state.saving) {
+  componentDidUpdate(prevProps: SendRemindersComposerButtonProps) {
+    if (prevProps.draft !== this.props.draft && this.state.saving) {
       this.setState({ saving: false });
     }
   }
 
-  shouldComponentUpdate(nextProps) {
+  shouldComponentUpdate(nextProps: SendRemindersComposerButtonProps) {
     return reminderDateFor(nextProps.draft) !== reminderDateFor(this.props.draft);
   }
 
-  onSetReminder = reminderDate => {
+  onSetReminder = (reminderDate: Date | null) => {
     const { draft, session } = this.props;
     this.setState({ saving: true });
 
@@ -64,7 +58,7 @@ export default class SendRemindersComposerButton extends Component<
     Actions.openPopover(
       <SendRemindersPopover
         reminderDate={reminderDateFor(draft)}
-        onRemind={date => this.onSetReminder(date)}
+        onRemind={(date) => this.onSetReminder(date)}
         onCancelReminder={() => this.onSetReminder(null)}
       />,
       { originRect: buttonRect, direction: 'up' }

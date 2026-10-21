@@ -1,10 +1,11 @@
 import React from 'react';
-import moment, { Moment } from 'moment';
+import { Moment } from 'moment';
 import classnames from 'classnames';
-import { Utils, Event } from 'mailspring-exports';
+import { Utils } from 'mailspring-exports';
 import { CalendarEvent } from './calendar-event';
-import { EventOccurrence } from './calendar-data-source';
+import { EventOccurrence, FocusedEventInfo, isEventSelected } from './calendar-data-source';
 import { overlapForEvents } from './week-view-helpers';
+import { DragState, HitZone } from './calendar-drag-types';
 
 /*
  * This display a single column of events in the Week View.
@@ -15,18 +16,30 @@ import { overlapForEvents } from './week-view-helpers';
 interface WeekViewEventColumnProps {
   events: EventOccurrence[];
   day: Moment;
+  /** Exclusive — the next column's start, so a DST day is not assumed to be 86400s */
   dayEnd: number;
-  focusedEvent: EventOccurrence;
+  focusedEvent: FocusedEventInfo | null;
   onEventClick: (e: React.MouseEvent<any>, event: EventOccurrence) => void;
   onEventDoubleClick: (event: EventOccurrence) => void;
+  onEventContextMenu: (event: EventOccurrence) => void;
   onEventFocused: (event: EventOccurrence) => void;
   selectedEvents: EventOccurrence[];
+  dragState: DragState | null;
+  onEventDragStart: (
+    event: EventOccurrence,
+    mouseEvent: React.MouseEvent,
+    hitZone: HitZone
+  ) => void;
+  /** Set of calendar IDs that are read-only */
+  readOnlyCalendarIds: Set<string>;
+  /** See MailspringCalendarViewProps.paintVersion; a new value is what gets past the guard below. */
+  paintVersion: string;
 }
 
 export class WeekViewEventColumn extends React.Component<WeekViewEventColumnProps> {
   static displayName = 'WeekViewEventColumn';
 
-  shouldComponentUpdate(nextProps, nextState) {
+  shouldComponentUpdate(nextProps: WeekViewEventColumnProps, nextState: Record<string, never>) {
     return !Utils.isEqualReact(nextProps, this.props) || !Utils.isEqualReact(nextState, this.state);
   }
 
@@ -39,35 +52,45 @@ export class WeekViewEventColumn extends React.Component<WeekViewEventColumnProp
       day,
       onEventClick,
       onEventDoubleClick,
+      onEventContextMenu,
       onEventFocused,
+      dragState,
+      onEventDragStart,
+      readOnlyCalendarIds,
     } = this.props;
 
     const className = classnames({
       'event-column': true,
       weekend: day.day() === 0 || day.day() === 6,
     });
-    const overlap = overlapForEvents(events);
-    const end = moment(day)
-      .add(1, 'day')
-      .subtract(1, 'millisecond')
-      .valueOf();
+    const dayStart = day.unix();
+    const overlap = overlapForEvents(events, { start: dayStart, end: dayEnd });
 
     return (
-      <div className={className} key={day.valueOf()} data-start={day.valueOf()} data-end={end}>
-        {events.map(e => (
+      <div
+        className={className}
+        key={day.valueOf()}
+        data-calendar-start={dayStart}
+        data-calendar-end={dayEnd}
+        data-calendar-type="day-column"
+      >
+        {events.map((e) => (
           <CalendarEvent
-            ref={`event-${e.id}`}
             event={e}
-            selected={selectedEvents.includes(e)}
-            order={overlap[e.id].order}
+            selected={isEventSelected(selectedEvents, e)}
+            order={overlap[e.id]?.order || 1}
             focused={focusedEvent ? focusedEvent.id === e.id : false}
             key={e.id}
             scopeEnd={dayEnd}
-            scopeStart={day.unix()}
-            concurrentEvents={overlap[e.id].concurrentEvents}
+            scopeStart={dayStart}
+            concurrentEvents={overlap[e.id]?.concurrentEvents || 1}
             onClick={onEventClick}
             onDoubleClick={onEventDoubleClick}
+            onContextMenu={onEventContextMenu}
             onFocused={onEventFocused}
+            isDragging={dragState?.event.id === e.id}
+            onDragStart={onEventDragStart}
+            isCalendarReadOnly={readOnlyCalendarIds.has(e.calendarId)}
           />
         ))}
       </div>

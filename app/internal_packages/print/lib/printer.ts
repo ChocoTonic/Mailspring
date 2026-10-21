@@ -1,10 +1,10 @@
-import { AccountStore, Actions } from 'mailspring-exports';
+import { AccountStore, Actions, Thread } from 'mailspring-exports';
 import PrintWindow from './print-window';
 
 class Printer {
   public unsub = Actions.printThread.listen(this._printThread);
 
-  _printThread(thread, htmlContent) {
+  _printThread(thread: Thread, htmlContent: string) {
     if (!thread) throw new Error('Printing: No thread active!');
     const account = AccountStore.accountForId(thread.accountId);
 
@@ -13,9 +13,13 @@ class Printer {
     // These iframes should correspond to the message iframes when a thread is
     // focused
     const iframes = document.getElementsByTagName('iframe');
-    // Grab the html inside the iframes
-    const messagesHtml = [].slice.call(iframes).map(iframe => {
-      return iframe.contentDocument.documentElement.innerHTML;
+    // Grab the html inside the iframes. The dark "email render mode" style inverts
+    // the iframe's <body>; inlined into the print document it would invert the
+    // whole page, so it is dropped here.
+    const messagesHtml = [].slice.call(iframes).map((iframe) => {
+      const root = iframe.contentDocument.documentElement.cloneNode(true) as HTMLElement;
+      root.querySelectorAll('style[data-email-render-mode]').forEach((el) => el.remove());
+      return root.innerHTML;
     });
 
     const win = new PrintWindow({

@@ -1,6 +1,5 @@
 import React, { CSSProperties } from 'react';
 import ReactDOM from 'react-dom';
-import { PropTypes } from 'mailspring-exports';
 import { RetinaImg } from 'mailspring-component-kit';
 import { Menu, MenuProps } from './menu';
 
@@ -31,8 +30,10 @@ export default class DropdownMenu extends React.Component<DropdownMenuProps, Dro
     };
   }
 
-  componentWillReceiveProps(nextProps) {
-    this.setState({ currentSelection: nextProps.intitialSelectionItem });
+  componentDidUpdate(prevProps: DropdownMenuProps) {
+    if (prevProps.intitialSelectionItem !== this.props.intitialSelectionItem) {
+      this.setState({ currentSelection: this.props.intitialSelectionItem });
+    }
   }
 
   _toggleExpanded = () => {
@@ -52,7 +53,7 @@ export default class DropdownMenu extends React.Component<DropdownMenuProps, Dro
     }
   };
 
-  _onSelect = item => {
+  _onSelect = (item) => {
     this.setState({ currentSelection: item });
     if (this.props.onSelect) {
       this.props.onSelect(item);
@@ -60,9 +61,9 @@ export default class DropdownMenu extends React.Component<DropdownMenuProps, Dro
     this._close();
   };
 
-  _onBlur = e => {
+  _onBlur = (e: React.FocusEvent<HTMLDivElement>) => {
     const node = ReactDOM.findDOMNode(this);
-    let otherNode = e.relatedTarget;
+    let otherNode = e.relatedTarget as Element | null;
     if (otherNode) {
       while (otherNode.parentElement) {
         // Don't close the dropdown if the related target is a child of this component

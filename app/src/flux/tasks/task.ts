@@ -34,6 +34,16 @@ export class Task extends Model {
   source: string;
   error: string;
 
+  /** Set in subclasses to enable undo support. Defaults to falsy (undefined). */
+  canBeUndone: boolean;
+
+  /**
+   * True when the engine writes data the undo needs onto the task during its local phase
+   * (ChangeFolderTask.undoPlacements), so UndoRedoStore must build the undo from the
+   * version streamed back rather than the one the client queued.
+   */
+  engineWritesUndoData = false;
+
   // Public: Override the constructor to pass initial args to your Task and
   // initialize instance variables.
   //
@@ -61,8 +71,15 @@ export class Task extends Model {
   // Public: Return from `createIdenticalTask` and set a flag so your
   // `performLocal` and `performRemote` methods know that this is an undo
   // task.
-  createUndoTask() {
+  createUndoTask(): Task {
     throw new Error('Unimplemented');
+  }
+
+  // Public: Override when one undo can need several tasks (ChangeFolderTask reversing
+  // a move from several folders). UndoRedoStore queues whatever this returns; an empty
+  // array means the task cannot be reversed with the data at hand.
+  createUndoTasks(): Task[] {
+    return [this.createUndoTask()];
   }
 
   // Public: Return a deep-cloned task to be used for an undo task
@@ -71,7 +88,7 @@ export class Task extends Model {
     delete json.status;
     delete json.version;
     delete json.id;
-    return new this.constructor(json) as this;
+    return new (this.ctor as any)(json) as this;
   }
 
   // Public: code to run if (someone tries to dequeue your task while it is)
@@ -86,13 +103,19 @@ export class Task extends Model {
   // a string, no notification is displayed
   label() {}
 
+  // Public: (optional) A description of the task for undo notifications.
+  // Override in subclasses to provide a meaningful description.
+  description(): string | null {
+    return null;
+  }
+
   // Public: A string displayed to users indicating how many items your
   // task affected.
   numberOfImpactedItems() {
     return 1;
   }
 
-  onError(err) {
+  onError(err: any) {
     // noop
   }
 

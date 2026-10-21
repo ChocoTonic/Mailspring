@@ -1,17 +1,34 @@
 import React from 'react';
-import { CSSTransitionGroup } from 'react-transition-group';
-import { WorkspaceStore } from 'mailspring-exports';
+import { CSSTransition, TransitionGroup } from 'react-transition-group';
+import { localized, WorkspaceStore } from 'mailspring-exports';
 
 import Sheet from './sheet';
 import Toolbar from './sheet-toolbar';
 import { Flexbox } from './components/flexbox';
 import { InjectedComponentSet } from './components/injected-component-set';
+import { NavRail } from './components/nav-rail';
 import { SheetDeclaration } from './flux/stores/workspace-store';
+import { Disposable } from 'rx-core';
 
 interface SheetContainerState {
   stack: SheetDeclaration[];
   mode: string;
   error?: string;
+}
+
+/*
+Marks a stacked-under subtree inert, so it takes no focus and no pointer events.
+
+Spread rather than written as `inert={...}`: `inert` is a real HTML attribute that React
+passes straight through, but it is absent from React 17's JSX types. The augmentation in
+types/react-ext.d.ts declares it and does not take effect, because two copies of
+@types/react are installed - one under app/node_modules, one at the repo root - and both
+register a global JSX namespace, so the copy that wins the JSX check is not the copy the
+`declare module 'react'` augmentation merges into. Spreading sidesteps the attribute-name
+check without asserting anything about the element.
+*/
+function inertWhenStacked(stacked: boolean): { inert?: '' } {
+  return stacked ? { inert: '' } : {};
 }
 
 export default class SheetContainer extends React.Component<
@@ -22,6 +39,7 @@ export default class SheetContainer extends React.Component<
 
   _toolbarComponents = {};
   unsubscribe?: () => void;
+  windowPropsDisposable?: Disposable;
 
   constructor(props) {
     super(props);
@@ -30,9 +48,12 @@ export default class SheetContainer extends React.Component<
 
   componentDidMount() {
     this.unsubscribe = WorkspaceStore.listen(this._onStoreChange);
+    // A hot window mounts with the empty window's load settings and receives the real
+    // ones (including `toolbar`) only when it is assigned a window type.
+    this.windowPropsDisposable = AppEnv.onWindowPropsReceived(this._onStoreChange);
   }
 
-  componentDidCatch(error, info) {
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
     // We don't currently display the error, but we need to call setState within
     // this function or the component does not re-render after being reset.
     this.setState({ error: error.stack });
@@ -43,6 +64,9 @@ export default class SheetContainer extends React.Component<
     if (this.unsubscribe) {
       this.unsubscribe();
     }
+    if (this.windowPropsDisposable) {
+      this.windowPropsDisposable.dispose();
+    }
   }
 
   _getStateFromStores() {
@@ -52,7 +76,7 @@ export default class SheetContainer extends React.Component<
     };
   }
 
-  _onColumnSizeChanged = sheet => {
+  _onColumnSizeChanged = (sheet: Sheet) => {
     const toolbar = this._toolbarComponents[sheet.props.depth];
     if (toolbar) {
       toolbar.recomputeLayout();
@@ -66,11 +90,13 @@ export default class SheetContainer extends React.Component<
 
   _lastToolbarClickTime = 0;
 
-  _onToolbarDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  _onToolbarDoubleClick = (e: React.MouseEvent<HTMLElement>) => {
     if (process.platform !== 'darwin') return;
-    if (e.target instanceof HTMLElement) {
-      if (['INPUT', 'A', 'BUTTON'].includes(e.target.tagName)) return;
-      if (e.target.hasAttribute('contenteditable')) return;
+    if (
+      e.target instanceof Element &&
+      e.target.closest('button, input, select, textarea, a, [contenteditable]')
+    ) {
+      return;
     }
 
     if (Date.now() - this._lastToolbarClickTime < 350) {
@@ -93,7 +119,7 @@ export default class SheetContainer extends React.Component<
     const components = this.state.stack.map((sheet, index) => (
       <Toolbar
         data={sheet}
-        ref={cm => {
+        ref={(cm) => {
           this._toolbarComponents[index] = cm;
         }}
         key={`${index}:${sheet.id}:toolbar`}
@@ -102,26 +128,29 @@ export default class SheetContainer extends React.Component<
     ));
 
     return (
-      <div
+      <header
         className="sheet-toolbar"
+        role="banner"
+        aria-label={localized('Application toolbar')}
         style={{ order: 0, zIndex: 3 }}
         onClick={this._onToolbarDoubleClick}
       >
-        {components[0]}
-        <CSSTransitionGroup
-          transitionLeaveTimeout={125}
-          transitionEnterTimeout={125}
-          transitionName="opacity-125ms"
-        >
-          {components.slice(1)}
-        </CSSTransitionGroup>
-      </div>
+        <div {...inertWhenStacked(this.state.stack.length > 1)}>{components[0]}</div>
+        <TransitionGroup component={null}>
+          {components.slice(1).map((comp) => (
+            <CSSTransition key={comp.key} classNames="opacity-125ms" timeout={125}>
+              {comp}
+            </CSSTransition>
+          ))}
+        </TransitionGroup>
+      </header>
     );
   }
 
   render() {
     const totalSheets = this.state.stack.length;
     const topSheet = this.state.stack[totalSheets - 1];
+    const hasNavRail = AppEnv.isMainWindow();
 
     if (!topSheet) {
       return <div />;
@@ -144,32 +173,50 @@ export default class SheetContainer extends React.Component<
       >
         {this._toolbarContainerElement()}
 
-        <div style={{ order: 1, zIndex: 2 }}>
-          <InjectedComponentSet
-            matching={{ locations: [topSheet.Header, WorkspaceStore.Sheet.Global.Header] }}
+        <Flexbox
+          direction="row"
+          className={hasNavRail ? 'nav-rail-frame' : undefined}
+          style={{ order: 1, flex: 1, minHeight: 0 }}
+        >
+          {hasNavRail && <NavRail />}
+          <Flexbox
             direction="column"
-            id={topSheet.id}
-          />
-        </div>
-
-        <div style={{ order: 2, flex: 1, position: 'relative', zIndex: 1 }}>
-          {sheetComponents[0]}
-          <CSSTransitionGroup
-            transitionLeaveTimeout={125}
-            transitionEnterTimeout={125}
-            transitionName="sheet-stack"
+            className={hasNavRail ? 'nav-rail-content' : undefined}
+            // The inset card's margin and border would overflow a 100% height.
+            height={hasNavRail ? 'auto' : undefined}
+            style={{ flex: 1, minWidth: 0 }}
           >
-            {sheetComponents.slice(1)}
-          </CSSTransitionGroup>
-        </div>
+            <div style={{ order: 1, zIndex: 2 }}>
+              <InjectedComponentSet
+                matching={{ locations: [topSheet.Header, WorkspaceStore.Sheet.Global.Header] }}
+                direction="column"
+                id={topSheet.id}
+              />
+            </div>
 
-        <div style={{ order: 3, zIndex: 4 }}>
-          <InjectedComponentSet
-            matching={{ locations: [topSheet.Footer, WorkspaceStore.Sheet.Global.Footer] }}
-            direction="column"
-            id={topSheet.id}
-          />
-        </div>
+            <main
+              style={{ order: 2, flex: 1, position: 'relative', zIndex: 1 }}
+              aria-label={localized('Email workspace')}
+            >
+              <div {...inertWhenStacked(totalSheets > 1)}>{sheetComponents[0]}</div>
+              <TransitionGroup component={null}>
+                {sheetComponents.slice(1).map((comp) => (
+                  <CSSTransition key={comp.key} classNames="sheet-stack" timeout={125}>
+                    {comp}
+                  </CSSTransition>
+                ))}
+              </TransitionGroup>
+            </main>
+
+            <footer style={{ order: 3, zIndex: 4 }}>
+              <InjectedComponentSet
+                matching={{ locations: [topSheet.Footer, WorkspaceStore.Sheet.Global.Footer] }}
+                direction="column"
+                id={topSheet.id}
+              />
+            </footer>
+          </Flexbox>
+        </Flexbox>
       </Flexbox>
     );
   }

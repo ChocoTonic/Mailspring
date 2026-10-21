@@ -1,534 +1,308 @@
-/* eslint-disable no-prototype-builtins */
-/*
-The sanitizer implementation here is loosely based on
-https://www.quaxio.com/html_white_listed_sanitizer/
-*/
+import DOMPurify from 'dompurify';
 
-const asMap = arr => {
-  const obj = {};
-  arr.forEach(k => (obj[k] = true));
-  return obj;
-};
-
-const sanitizeURL = function(val, rules) {
-  if (!val) {
-    return null;
-  }
-  if (rules.except && rules.except.find(scheme => val.startsWith(scheme))) {
-    return null;
-  }
-
-  return val;
-};
-
-// https://stackoverflow.com/questions/2725156/complete-list-of-html-tag-attributes-which-have-a-url-value
-const AttributesContainingLinks = [
-  'src',
-  'codebase',
+// <form>, <input>, and <button> are intentionally permitted: some marketing and
+// transactional emails embed basic interactive forms (RSVPs, polls, feedback)
+// and we want to keep rendering them. <meta> and <keygen> are not allowed —
+// <meta http-equiv="refresh"> can navigate the message iframe to an attacker
+// origin, and <keygen> is obsolete with no legitimate email use.
+const AllowedTags = [
+  '#text',
+  'a',
+  'abbr',
+  'address',
+  'area',
+  'article',
+  'aside',
+  'b',
+  'bdi',
+  'bdo',
+  'big',
+  'blockquote',
+  'body',
+  'br',
+  'button',
+  'canvas',
+  'caption',
   'cite',
-  'background',
-  'longdesc',
-  'profile',
-  'usemap',
+  'center',
+  'code',
+  'col',
+  'colgroup',
   'data',
-  'href',
-  'action',
-  'formaction',
-  'icon',
-  'manifest',
-  'poster',
-  'srcdoc',
-  'srcset',
-  'archive',
-  'classid',
+  'datalist',
+  'dd',
+  'del',
+  'details',
+  'dfn',
+  'dialog',
+  'div',
+  'dl',
+  'dt',
+  'em',
+  'fieldset',
+  'figcaption',
+  'figure',
+  'footer',
+  'font',
+  'form',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'hr',
+  'i',
+  'img',
+  'input',
+  'ins',
+  'kbd',
+  'label',
+  'legend',
+  'li',
+  'main',
+  'map',
+  'mark',
+  'menu',
+  'menuitem',
+  'meter',
+  'nav',
+  'ol',
+  'optgroup',
+  'option',
+  'output',
+  'p',
+  'param',
+  'picture',
+  'pre',
+  'progress',
+  'q',
+  'rp',
+  'rt',
+  'ruby',
+  's',
+  'samp',
+  'section',
+  'select',
+  'signature',
+  'small',
+  'source',
+  'span',
+  'strong',
+  'style',
+  'strike',
+  'sub',
+  'summary',
+  'sup',
+  'table',
+  'tbody',
+  'td',
+  'textarea',
+  'tfoot',
+  'th',
+  'thead',
+  'time',
+  'title',
+  'tr',
+  'track',
+  'u',
+  'ul',
+  'var',
+  'wbr',
+  'html',
 ];
 
-const NodesWithNonTextContent = asMap(['script', 'style', 'iframe', 'object', 'meta']);
+const AllowedAttributes = [
+  'abbr',
+  'accept',
+  'acceptcharset',
+  'accesskey',
+  'action',
+  'align',
+  'alt',
+  'async',
+  'autocomplete',
+  'axis',
+  'border',
+  'background',
+  'bgcolor',
+  'cellpadding',
+  'cellspacing',
+  'char',
+  'charoff',
+  'charset',
+  'checked',
+  'classid',
+  'class',
+  'classname',
+  'clear',
+  'colspan',
+  'cols',
+  'color',
+  'content',
+  'contextmenu',
+  'controls',
+  'compact',
+  'coords',
+  'data',
+  'datetime',
+  'defer',
+  'dir',
+  'disabled',
+  'download',
+  'draggable',
+  'enctype',
+  'face',
+  'form',
+  'formenctype',
+  'formmethod',
+  'formnovalidate',
+  'frame',
+  'frameborder',
+  'headers',
+  'height',
+  'hidden',
+  'high',
+  'href',
+  'hreflang',
+  'htmlfor',
+  'hspace',
+  'icon',
+  'id',
+  'label',
+  'lang',
+  'list',
+  'loop',
+  'low',
+  'marginheight',
+  'marginwidth',
+  'max',
+  'maxlength',
+  'media',
+  'mediagroup',
+  'method',
+  'min',
+  'multiple',
+  'muted',
+  'name',
+  'novalidate',
+  'nowrap',
+  'noshade',
+  'open',
+  'optimum',
+  'pattern',
+  'placeholder',
+  'poster',
+  'preload',
+  'radiogroup',
+  'readonly',
+  'rel',
+  'required',
+  'role',
+  'rowspan',
+  'rows',
+  'rules',
+  'scope',
+  'scoped',
+  'scrolling',
+  'seamless',
+  'selected',
+  'shape',
+  'size',
+  'sizes',
+  'start',
+  'sortable',
+  'sorted',
+  'span',
+  'spellcheck',
+  'src',
+  'srcset',
+  'start',
+  'step',
+  'style',
+  'summary',
+  'tabindex',
+  'target',
+  'title',
+  'translate',
+  'type',
+  'usemap',
+  'valign',
+  'value',
+  'vspace',
+  'width',
+  'wmode',
+];
 
-const Preset = {
-  PasteFragment: {
-    fragment: true,
-    allowedTags: asMap([
-      'p',
-      'b',
-      'i',
-      'em',
-      'u',
-      's',
-      'strong',
-      'center',
-      'a',
-      'br',
-      'img',
-      'ul',
-      'ol',
-      'li',
-      'strike',
-      'table',
-      'tr',
-      'td',
-      'th',
-      'col',
-      'colgroup',
-      'div',
-      'html',
-      'font',
-    ]),
-    allowedSchemes: {
-      default: { except: ['file:'] },
-    },
-    allowedAttributes: {
-      default: asMap([
-        'abbr',
-        'accept',
-        'acceptcharset',
-        'accesskey',
-        'action',
-        'align',
-        'alt',
-        'async',
-        'autocomplete',
-        'axis',
-        'border',
-        'background',
-        'bgcolor',
-        'cellpadding',
-        'cellspacing',
-        'char',
-        'charoff',
-        'charset',
-        'checked',
-        'class',
-        'classid',
-        'classname',
-        'color',
-        'colspan',
-        'cols',
-        'content',
-        'contextmenu',
-        'controls',
-        'coords',
-        'data-overlay-id',
-        'data-component-props',
-        'data-component-key',
-        'data',
-        'datetime',
-        'defer',
-        'dir',
-        'disabled',
-        'download',
-        'draggable',
-        'enctype',
-        'face',
-        'form',
-        'formaction',
-        'formenctype',
-        'formmethod',
-        'formnovalidate',
-        'formtarget',
-        'frame',
-        'frameborder',
-        'headers',
-        'height',
-        'hidden',
-        'high',
-        'href',
-        'hreflang',
-        'htmlfor',
-        'httpequiv',
-        'icon',
-        'id',
-        'label',
-        'lang',
-        'list',
-        'loop',
-        'low',
-        'manifest',
-        'marginheight',
-        'marginwidth',
-        'max',
-        'maxlength',
-        'media',
-        'mediagroup',
-        'method',
-        'min',
-        'multiple',
-        'muted',
-        'name',
-        'novalidate',
-        'nowrap',
-        'open',
-        'optimum',
-        'pattern',
-        'placeholder',
-        'poster',
-        'preload',
-        'radiogroup',
-        'readonly',
-        'rel',
-        'required',
-        'role',
-        'rowspan',
-        'rows',
-        'rules',
-        'sandbox',
-        'scope',
-        'scoped',
-        'scrolling',
-        'seamless',
-        'selected',
-        'shape',
-        'size',
-        'sizes',
-        'sortable',
-        'sorted',
-        'span',
-        'spellcheck',
-        'src',
-        'srcdoc',
-        'srcset',
-        'start',
-        'step',
-        'style',
-        'summary',
-        'tabindex',
-        'target',
-        'title',
-        'translate',
-        'type',
-        'usemap',
-        'valign',
-        'value',
-        'width',
-        'wmode',
-      ]),
-    },
-  },
+// Strip `@import` rules from <style> blocks. They reach the network even when
+// the user has remote-content blocking enabled, so they're a silent
+// open-tracking vector in HTML mail.
+//
+// We use CSSStyleSheet.replaceSync, which silently drops `@import` from
+// constructed stylesheets — and gets us the browser's own tokenizer for free,
+// so CSS escapes like `@\69 mport`, CRLF preprocessing, etc. all just work
+// without us reimplementing the spec.
+//
+// Reserializing via `cssRules.cssText` is lossy (drops comments, `@charset`,
+// declarations the strict parser doesn't recognize like the IE6/7 `*display`
+// hack, and normalizes whitespace). That's OK here: the only consumers are
+// the same Chromium that just parsed the sheet (in the message iframe) and,
+// on the draft path, juice — both of which would already have dropped the
+// same things. If a future consumer needs byte-for-byte fidelity, this hook
+// is the wrong place to do it.
+function stripAtImportRules(cssText: string): string {
+  try {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(cssText);
+    return Array.from(sheet.cssRules)
+      .map((rule) => rule.cssText)
+      .join('\n');
+  } catch {
+    // Parse failure — fall back to leaving the CSS untouched rather than
+    // wiping the whole stylesheet. The DOMPurify allow-list still strips
+    // <script>, <link>, etc., so this isn't a script-injection path.
+    return cssText;
+  }
+}
 
-  UnsafeOnly: {
-    allowedTags: asMap([
-      'a',
-      'abbr',
-      'address',
-      'area',
-      'article',
-      'aside',
-      'b',
-      'bdi',
-      'bdo',
-      'big',
-      'blockquote',
-      'body',
-      'br',
-      'button',
-      'canvas',
-      'caption',
-      'cite',
-      'center',
-      'code',
-      'col',
-      'colgroup',
-      'data',
-      'datalist',
-      'dd',
-      'del',
-      'details',
-      'dfn',
-      'dialog',
-      'div',
-      'dl',
-      'dt',
-      'em',
-      'fieldset',
-      'figcaption',
-      'figure',
-      'footer',
-      'font',
-      'form',
-      'h1',
-      'h2',
-      'h3',
-      'h4',
-      'h5',
-      'h6',
-      'header',
-      'hr',
-      'i',
-      'img',
-      'input',
-      'ins',
-      'kbd',
-      'keygen',
-      'label',
-      'legend',
-      'li',
-      'main',
-      'map',
-      'mark',
-      'menu',
-      'menuitem',
-      'meta',
-      'meter',
-      'nav',
-      'ol',
-      'optgroup',
-      'option',
-      'output',
-      'p',
-      'param',
-      'picture',
-      'pre',
-      'progress',
-      'q',
-      'rp',
-      'rt',
-      'ruby',
-      's',
-      'samp',
-      'section',
-      'select',
-      'small',
-      'source',
-      'span',
-      'strong',
-      'style',
-      'strike',
-      'sub',
-      'summary',
-      'sup',
-      'table',
-      'tbody',
-      'td',
-      'textarea',
-      'tfoot',
-      'th',
-      'thead',
-      'time',
-      'title',
-      'tr',
-      'track',
-      'u',
-      'ul',
-      'var',
-      'wbr',
-      'html',
-    ]),
-    allowedAttributes: {
-      default: asMap([
-        'abbr',
-        'accept',
-        'acceptcharset',
-        'accesskey',
-        'action',
-        'align',
-        'alt',
-        'async',
-        'autocomplete',
-        'axis',
-        'border',
-        'background',
-        'bgcolor',
-        'cellpadding',
-        'cellspacing',
-        'char',
-        'charoff',
-        'charset',
-        'checked',
-        'classid',
-        'class',
-        'classname',
-        'clear',
-        'colspan',
-        'cols',
-        'color',
-        'content',
-        'contextmenu',
-        'controls',
-        'compact',
-        'coords',
-        'data',
-        'datetime',
-        'defer',
-        'dir',
-        'disabled',
-        'download',
-        'draggable',
-        'enctype',
-        'face',
-        'form',
-        'formaction',
-        'formenctype',
-        'formmethod',
-        'formnovalidate',
-        'formtarget',
-        'frame',
-        'frameborder',
-        'headers',
-        'height',
-        'hidden',
-        'high',
-        'href',
-        'hreflang',
-        'htmlfor',
-        'httpequiv',
-        'hspace',
-        'icon',
-        'id',
-        'label',
-        'lang',
-        'list',
-        'loop',
-        'low',
-        'manifest',
-        'marginheight',
-        'marginwidth',
-        'max',
-        'maxlength',
-        'media',
-        'mediagroup',
-        'method',
-        'min',
-        'multiple',
-        'muted',
-        'name',
-        'novalidate',
-        'nowrap',
-        'noshade',
-        'open',
-        'optimum',
-        'pattern',
-        'placeholder',
-        'poster',
-        'preload',
-        'radiogroup',
-        'readonly',
-        'rel',
-        'required',
-        'role',
-        'rowspan',
-        'rows',
-        'rules',
-        'sandbox',
-        'scope',
-        'scoped',
-        'scrolling',
-        'seamless',
-        'selected',
-        'shape',
-        'size',
-        'sizes',
-        'start',
-        'sortable',
-        'sorted',
-        'span',
-        'spellcheck',
-        'src',
-        'srcdoc',
-        'srcset',
-        'start',
-        'step',
-        'style',
-        'summary',
-        'tabindex',
-        'target',
-        'title',
-        'translate',
-        'type',
-        'usemap',
-        'valign',
-        'value',
-        'vspace',
-        'width',
-        'wmode',
-      ]),
-    },
-    allowedSchemes: {
-      default: { except: ['file:'] },
-    },
-  },
-};
+DOMPurify.addHook('uponSanitizeElement', (node: Element, data: { tagName: string }) => {
+  if (data.tagName !== 'style') return;
+  const styleEl = node as HTMLStyleElement;
+  styleEl.textContent = stripAtImportRules(styleEl.textContent ?? '');
+});
 
 class SanitizeTransformer {
-  Preset = Preset;
-
-  sanitizeNode(node: Element, settings) {
-    const nodeName = node.nodeName.toLowerCase();
-    if (nodeName === '#text') {
-      return true; // text nodes are always safe, don't need to clone them
-    }
-
-    if (nodeName === '#comment') {
-      return false; // always strip comments
-    }
-
-    if (!settings.allowedTags.hasOwnProperty(nodeName)) {
-      // this node isn't allowed - what should we do with it?
-
-      // Nodes with non-text contents: completely remove them
-      if (NodesWithNonTextContent.hasOwnProperty(nodeName)) {
-        return false;
-      }
-
-      // Nodes with text contents / no contents: replace with a `span` with the same children.
-      // This allows us to ignore things like tables / table cells and still get their contents.
-      const replacementNode = document.createElement('span');
-      for (const child of Array.from(node.childNodes)) {
-        replacementNode.appendChild(child);
-      }
-      node.parentNode.replaceChild(replacementNode, node);
-      node = replacementNode;
-    }
-
-    // identify the allowed attributes based on our settings
-    let allowedForNodeName = settings.allowedAttributes.default;
-    if (settings.allowedAttributes.hasOwnProperty(nodeName)) {
-      allowedForNodeName = settings.allowedAttributes[nodeName];
-    }
-
-    // remove and sanitize attributes using the whitelist / URL scheme rules
-    for (let i = node.attributes.length - 1; i >= 0; i--) {
-      const attr = node.attributes.item(i).name;
-      if (!allowedForNodeName.hasOwnProperty(attr)) {
-        node.removeAttribute(attr);
-        continue;
-      }
-      if (AttributesContainingLinks.includes(attr)) {
-        let rules = settings.allowedSchemes.default;
-        if (settings.allowedSchemes.hasOwnProperty(nodeName)) {
-          rules = settings.allowedSchemes[nodeName];
-        }
-        const sanitizedValue = sanitizeURL(node.getAttribute(attr), rules);
-        if (sanitizedValue !== null) {
-          node.setAttribute(attr, sanitizedValue);
-        } else {
-          node.removeAttribute(attr);
-        }
-      }
-    }
-
-    // recursively sanitize child nodes
-    for (let i = node.childNodes.length - 1; i >= 0; i--) {
-      if (!this.sanitizeNode(node.childNodes[i] as Element, settings)) {
-        node.childNodes[i].remove();
-      }
-    }
-
-    return true;
+  runSync(bodyHTML: string) {
+    return DOMPurify.sanitize(bodyHTML, {
+      ALLOWED_TAGS: AllowedTags,
+      ALLOWED_ATTR: AllowedAttributes,
+      // DOMPurify permits every data-* attribute by default, independently of
+      // ALLOWED_ATTR. Some are reserved attributes that other parts of the app
+      // treat as trusted, so they must not survive from untrusted mail. Nothing
+      // in the email-display or composer paths reads data-* off sanitized mail,
+      // so drop the whole class rather than allowlisting individual names. See
+      // GHSA-2x8h-f5qm-f779.
+      ALLOW_DATA_ATTR: false,
+      // Explicit allowlist of safe URI schemes for email content.
+      // file: is intentionally absent — legitimate attachment file:// paths are
+      // injected programmatically after sanitization, never from raw email HTML.
+      ALLOWED_URI_REGEXP:
+        /^(?:(?:https?|ftps?|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|(?!file:)[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
+      KEEP_CONTENT: true,
+      // Emails routinely put their entire stylesheet in <head>. DOMPurify
+      // returns `body.innerHTML`, so without this the parser puts those
+      // <style> blocks in <head> and they are discarded before the allow-list
+      // is ever consulted. FORCE_BODY prepends a throwaway element so the
+      // parser opens <body> immediately and head-level content is sanitized
+      // and kept inline. <base>, <link> and <meta> are still dropped by the
+      // allow-list, and the @import hook above now actually sees these sheets.
+      FORCE_BODY: true,
+    });
   }
 
-  async run(body, settings) {
-    if (settings.fragment) {
-      const doc = document.implementation.createHTMLDocument();
-      const div = doc.createElement('div');
-      div.innerHTML = body;
-      this.sanitizeNode(div, settings);
-      return div.innerHTML;
-    } else {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(body, 'text/html');
-      this.sanitizeNode(doc.documentElement, settings);
-      return doc.documentElement.innerHTML;
-    }
+  async run(bodyHTML: string) {
+    return this.runSync(bodyHTML);
   }
 }
 

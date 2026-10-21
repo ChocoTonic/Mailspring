@@ -1,5 +1,4 @@
 /* eslint global-require: 0*/
-import _ from 'underscore';
 import {
   localized,
   Thread,
@@ -7,29 +6,58 @@ import {
   Message,
   TaskFactory,
   DatabaseStore,
-  FocusedPerspectiveStore,
+  MailboxPerspective,
+  CategoryStore,
+  GetMessageRFC2822Task,
+  SyncbackDraftTask,
+  DraftFactory,
+  AccountStore,
+  TaskQueue,
+  EmlUtils,
 } from 'mailspring-exports';
 
 type TemplateItem =
   | {
-    label: string;
-    click: () => void;
-  }
+      label: string;
+      click: () => void;
+    }
   | { type: 'separator' };
 
+const isInbox = (thread: Thread) => thread.categories.some((c) => c.role === 'inbox');
+
+/**
+ * The standard menu for one or more threads. `perspective` is the mailbox the threads are
+ * listed in. Without one (Views, which list threads from anywhere), Archive and Trash are
+ * offered from the threads' own folders and their tasks move every placement rather than
+ * scoping the move to a source folder.
+ */
 export default class ThreadListContextMenu {
   threadIds: string[];
   accountIds: string[];
   threads?: Thread[];
+  perspective: MailboxPerspective | null;
+  source: string;
 
-  constructor({ threadIds = [], accountIds = [] }) {
+  constructor({
+    threadIds = [],
+    accountIds = [],
+    perspective = null,
+    source = 'Context Menu: Thread List',
+  }: {
+    threadIds: string[];
+    accountIds: string[];
+    perspective?: MailboxPerspective | null;
+    source?: string;
+  }) {
     this.threadIds = threadIds;
     this.accountIds = accountIds;
+    this.perspective = perspective;
+    this.source = source;
   }
 
   menuItemTemplate() {
     return DatabaseStore.modelify<Thread>(Thread, this.threadIds)
-      .then(threads => {
+      .then((threads) => {
         this.threads = threads;
 
         return Promise.all<TemplateItem>([
@@ -39,24 +67,27 @@ export default class ThreadListContextMenu {
           this.replyItem(),
           this.replyAllItem(),
           this.forwardItem(),
+          this.forwardAsAttachmentItem(),
           { type: 'separator' },
           this.archiveItem(),
-          this.trashItem(),
           this.markAsReadItem(),
-          this.markAsSpamItem(),
           this.starItem(),
           { type: 'separator' },
+          this.trashItem(),
+          this.markAsSpamItem(),
+          { type: 'separator' },
           this.createMailboxLinkItem(),
+          { type: 'separator' },
+          this.saveAsEmlItem(),
         ]);
       })
-      .then(menuItems => {
-        return _.filter(_.compact(menuItems), (item, index) => {
-          if (
-            (index === 0 || index === menuItems.length - 1) &&
-            (item as any).type === 'separator'
-          ) {
-            return false;
-          }
+      .then((menuItems) => {
+        const compacted = menuItems.filter(Boolean);
+        return compacted.filter((item, index) => {
+          if ((item as any).type !== 'separator') return true;
+          // Remove leading, trailing, and consecutive separators
+          if (index === 0 || index === compacted.length - 1) return false;
+          if ((compacted[index - 1] as any).type === 'separator') return false;
           return true;
         });
       });
@@ -67,7 +98,10 @@ export default class ThreadListContextMenu {
       return null;
     }
     const first = this.threads[0];
-    const from = first.participants.find(p => !p.isMe()) || first.participants[0];
+    const from = first.participants.find((p) => !p.isMe()) || first.participants[0];
+    if (!from) {
+      return null;
+    }
 
     return {
       label: localized(`Search for`) + ' ' + from.email,
@@ -119,7 +153,7 @@ export default class ThreadListContextMenu {
     return DatabaseStore.findBy<Message>(Message, { threadId: this.threadIds[0] })
       .order(Message.attributes.date.descending())
       .limit(1)
-      .then(message => {
+      .then((message) => {
         if (message && message.canReplyAll()) {
           return {
             label: localized('Reply All'),
@@ -149,9 +183,55 @@ export default class ThreadListContextMenu {
     };
   }
 
+  forwardAsAttachmentItem(): TemplateItem | null {
+    if (this.threadIds.length !== 1 || !this.threads[0]) {
+      return null;
+    }
+    return {
+      label: localized('Forward as Attachment'),
+      click: async () => {
+        const thread = this.threads[0];
+        const staged = await EmlUtils.stageThreadAsEml(thread.id, {
+          filename: 'Forwarded Message.eml',
+        });
+
+        if (!staged) {
+          AppEnv.showErrorDialog(
+            localized('Could not download the original message. Please try again.')
+          );
+          return;
+        }
+        const { message, filePath } = staged;
+
+        const account = AccountStore.accountForId(message.accountId);
+        const draft = await DraftFactory.createDraft({
+          subject: `Fwd: ${message.subject || ''}`,
+          from: [account.defaultMe()],
+          accountId: message.accountId,
+        });
+
+        const syncTask = new SyncbackDraftTask({ draft });
+        Actions.queueTask(syncTask);
+        await TaskQueue.waitForPerformLocal(syncTask);
+
+        Actions.addAttachment({
+          filePath,
+          headerMessageId: draft.headerMessageId,
+          onCreated: () => {
+            EmlUtils.discardStagedEml(filePath);
+            Actions.composePopoutDraft(draft.headerMessageId);
+          },
+        });
+      },
+    };
+  }
+
   archiveItem(): TemplateItem | null {
-    const perspective = FocusedPerspectiveStore.current();
-    const allowed = perspective.canArchiveThreads(this.threads);
+    const { perspective } = this;
+    const allowed = perspective
+      ? perspective.canArchiveThreads(this.threads)
+      : this.threads.some(isInbox) &&
+        AccountStore.accountsForItems(this.threads).every((acc) => acc.canArchiveThreads());
     if (!allowed) {
       return null;
     }
@@ -159,8 +239,9 @@ export default class ThreadListContextMenu {
       label: localized('Archive'),
       click: () => {
         const tasks = TaskFactory.tasksForArchiving({
-          source: 'Context Menu: Thread List',
+          source: this.source,
           threads: this.threads,
+          perspective,
         });
         Actions.queueTasks(tasks);
       },
@@ -168,8 +249,13 @@ export default class ThreadListContextMenu {
   }
 
   trashItem(): TemplateItem | null {
-    const perspective = FocusedPerspectiveStore.current();
-    const allowed = perspective.canMoveThreadsTo(this.threads, 'trash');
+    const { perspective } = this;
+    const allowed = perspective
+      ? perspective.canMoveThreadsTo(this.threads, 'trash')
+      : !this.threads.every((t) => t.categories.some((c) => c.role === 'trash')) &&
+        AccountStore.accountsForItems(this.threads).every(
+          (acc) => CategoryStore.getCategoryByRole(acc, 'trash') !== null
+        );
     if (!allowed) {
       return null;
     }
@@ -177,7 +263,7 @@ export default class ThreadListContextMenu {
       label: localized('Trash'),
       click: () => {
         const tasks = TaskFactory.tasksForMovingToTrash({
-          source: 'Context Menu: Thread List',
+          source: this.source,
           threads: this.threads,
         });
         Actions.queueTasks(tasks);
@@ -186,7 +272,7 @@ export default class ThreadListContextMenu {
   }
 
   markAsReadItem(): TemplateItem | null {
-    const unread = this.threads.every(t => t.unread === false);
+    const unread = this.threads.every((t) => t.unread === false);
     const dir = unread ? localized('Unread') : localized('Read');
 
     return {
@@ -194,7 +280,7 @@ export default class ThreadListContextMenu {
       click: () => {
         Actions.queueTask(
           TaskFactory.taskForInvertingUnread({
-            source: 'Context Menu: Thread List',
+            source: this.source,
             threads: this.threads,
           })
         );
@@ -203,7 +289,7 @@ export default class ThreadListContextMenu {
   }
 
   markAsSpamItem(): TemplateItem | null {
-    const allInSpam = this.threads.every(item => item.folders.some(c => c.role === 'spam'));
+    const allInSpam = this.threads.every((item) => item.folders.some((c) => c.role === 'spam'));
     const dir = allInSpam ? localized('Not Spam') : localized('Spam');
 
     return {
@@ -212,20 +298,20 @@ export default class ThreadListContextMenu {
         Actions.queueTasks(
           allInSpam
             ? TaskFactory.tasksForMarkingNotSpam({
-              source: 'Context Menu: Thread List',
-              threads: this.threads,
-            })
+                source: this.source,
+                threads: this.threads,
+              })
             : TaskFactory.tasksForMarkingAsSpam({
-              source: 'Context Menu: Thread List',
-              threads: this.threads,
-            })
+                source: this.source,
+                threads: this.threads,
+              })
         );
       },
     };
   }
 
   starItem(): TemplateItem | null {
-    const starred = this.threads.every(t => t.starred === false);
+    const starred = this.threads.every((t) => t.starred === false);
 
     let label = localized('Star');
     if (!starred) {
@@ -237,7 +323,7 @@ export default class ThreadListContextMenu {
       click: () => {
         Actions.queueTask(
           TaskFactory.taskForInvertingStarred({
-            source: 'Context Menu: Thread List',
+            source: this.source,
             threads: this.threads,
           })
         );
@@ -256,14 +342,76 @@ export default class ThreadListContextMenu {
         const id = this.threadIds[0];
         const thread = await DatabaseStore.findBy<Thread>(Thread, { id }).limit(1);
         if (!thread) return;
-        require('electron').clipboard.writeText(thread.getMailboxPermalink());
+        require('@electron/remote').clipboard.writeText(thread.getMailboxPermalink());
       },
     };
   }
 
-  displayMenu() {
-    this.menuItemTemplate().then(template => {
-      require('@electron/remote').Menu.buildFromTemplate(template).popup({});
+  saveAsEmlItem(): TemplateItem {
+    const label =
+      this.threadIds.length > 1
+        ? localized('Save %1$@ threads as .eml...', this.threadIds.length)
+        : localized('Save as .eml...');
+
+    return {
+      label,
+      click: async () => {
+        if (this.threadIds.length === 1) {
+          const thread = this.threads[0];
+          const messages = await EmlUtils.newestExportableMessagesForThreadIds([thread.id]);
+          if (!messages.length) return;
+
+          const message = messages[0];
+          const defaultFilename = EmlUtils.defaultEmlFilename(message.subject);
+
+          AppEnv.showSaveDialog({ defaultPath: defaultFilename }, async (savePath: string) => {
+            if (!savePath) return;
+            const task = new GetMessageRFC2822Task({
+              messageId: message.id,
+              accountId: message.accountId,
+              filepath: savePath,
+            });
+            Actions.queueTask(task);
+          });
+        } else {
+          AppEnv.showOpenDialog(
+            {
+              title: localized('Save .eml files to...'),
+              buttonLabel: localized('Save All'),
+              properties: ['openDirectory', 'createDirectory'],
+            },
+            async (selected: string[]) => {
+              if (!selected || selected.length === 0) return;
+              const outputDir = selected[0];
+              const path = require('path');
+
+              const messages = await EmlUtils.newestExportableMessagesForThreadIds(
+                this.threads.map((t) => t.id)
+              );
+
+              for (const message of messages) {
+                const filename = EmlUtils.defaultEmlFilename(message.subject);
+
+                const task = new GetMessageRFC2822Task({
+                  messageId: message.id,
+                  accountId: message.accountId,
+                  filepath: path.join(outputDir, filename),
+                });
+                Actions.queueTask(task);
+              }
+            }
+          );
+        }
+      },
+    };
+  }
+
+  /** Pops the menu at `position` (window coordinates), or at the cursor. */
+  displayMenu(position?: { x: number; y: number }) {
+    this.menuItemTemplate().then((template) => {
+      require('@electron/remote')
+        .Menu.buildFromTemplate(template)
+        .popup(position ? { x: Math.round(position.x), y: Math.round(position.y) } : {});
     });
   }
 }

@@ -42,6 +42,7 @@
     padding: 3px 8px;
     border-radius: 4px;
     border: 1px solid fade(@background-primary, 20%);
+    cursor: pointer;
 
     img {
       background-color: @background-primary;
@@ -50,6 +51,11 @@
     &:hover {
       background: fade(@black, 30%);
       border: 1px solid fade(@background-primary, 30%);
+    }
+
+    &:active {
+      background: fade(@black, 45%);
+      border: 1px solid fade(@background-primary, 40%);
     }
 
     .send-action-text,
@@ -77,13 +83,13 @@ body.platform-win32 {
   transform: translate3d(0, 0, 0);
 }
 
-.undo-redo-toast-fade-leave {
+.undo-redo-toast-fade-exit {
   opacity: 1;
   transform: translate3d(0, 0, 0);
   transition: all 0.15s ease-in;
 }
 
-.undo-redo-toast-fade-leave.undo-redo-toast-fade-leave-active {
+.undo-redo-toast-fade-exit.undo-redo-toast-fade-exit-active {
   transform: translate3d(0, 10px, 0);
   opacity: 0.01;
 }

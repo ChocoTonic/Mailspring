@@ -15,6 +15,7 @@ import {
   ChangeContactGroupMembershipTask,
 } from 'mailspring-exports';
 import { showGPeopleReadonlyNotice } from './GoogleSupport';
+import { exportContactsToFile } from './VCFImportExport';
 
 interface ContactDetailToolbarProps {
   editing: string | 'new' | false;
@@ -38,7 +39,7 @@ class ContactDetailToolbarWithData extends React.Component<ContactDetailToolbarP
     }
 
     const groupId = this.props.perspective.groupId;
-    const group = Store.groups().find(g => g.id === groupId);
+    const group = Store.groups().find((g) => g.id === groupId);
 
     Actions.queueTask(
       ChangeContactGroupMembershipTask.forMoving({
@@ -60,7 +61,24 @@ class ContactDetailToolbarWithData extends React.Component<ContactDetailToolbarP
 
   _onDelete = () => {
     const contacts = this.actionSet();
-    if (contacts.some(c => c.source === 'gpeople' && showGPeopleReadonlyNotice(c.accountId))) {
+    if (contacts.some((c) => c.source === 'gpeople' && showGPeopleReadonlyNotice(c.accountId))) {
+      return;
+    }
+    // DestroyContactTask can't be undone, so confirm before removing the contact from the server.
+    const response = require('@electron/remote').dialog.showMessageBoxSync({
+      type: 'warning',
+      message:
+        contacts.length === 1
+          ? localized('Delete %@?', contacts[0].name || contacts[0].email)
+          : localized('Delete %@ contacts?', contacts.length),
+      detail: localized(
+        'This contact will be removed from your address book. This cannot be undone.'
+      ),
+      buttons: [localized('Delete'), localized('Cancel')],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response !== 0) {
       return;
     }
     Actions.queueTask(
@@ -74,7 +92,7 @@ class ContactDetailToolbarWithData extends React.Component<ContactDetailToolbarP
     const { listSource, focusedId } = this.props;
     const focused = focusedId && listSource.getById(focusedId);
     const models = focused ? [focused] : listSource.selection.items();
-    return (models as any) as Contact[];
+    return models as any as Contact[];
   }
 
   render() {
@@ -92,6 +110,7 @@ class ContactDetailToolbarWithData extends React.Component<ContactDetailToolbarP
     }
     if (actionSet.length > 0) {
       commands['core:delete-item'] = this._onDelete;
+      commands['contacts:export-vcf-selected'] = () => exportContactsToFile(actionSet);
     }
     if (editable) {
       commands['core:edit-item'] = this._onEdit;
@@ -113,10 +132,28 @@ class ContactDetailToolbarWithData extends React.Component<ContactDetailToolbarP
           <button
             tabIndex={-1}
             title={localized('Delete')}
+            aria-label={localized('Delete')}
             className={`btn btn-toolbar ${actionSet.length === 0 && 'btn-disabled'}`}
             onClick={actionSet.length > 0 ? this._onDelete : undefined}
           >
-            <RetinaImg name="toolbar-trash.png" mode={RetinaImg.Mode.ContentIsMask} />
+            <RetinaImg
+              name="toolbar-trash.png"
+              mode={RetinaImg.Mode.ContentIsMask}
+              aria-hidden="true"
+            />
+          </button>
+          <button
+            tabIndex={-1}
+            title={localized('Export vCard')}
+            aria-label={localized('Export vCard')}
+            className={`btn btn-toolbar ${actionSet.length === 0 && 'btn-disabled'}`}
+            onClick={actionSet.length > 0 ? () => exportContactsToFile(actionSet) : undefined}
+          >
+            <RetinaImg
+              name="toolbar-download.png"
+              mode={RetinaImg.Mode.ContentIsMask}
+              aria-hidden="true"
+            />
           </button>
           <button
             tabIndex={-1}
@@ -132,26 +169,25 @@ class ContactDetailToolbarWithData extends React.Component<ContactDetailToolbarP
   }
 }
 
-export const ContactDetailToolbar: React.FunctionComponent<
-  ContactDetailToolbarProps
-> = ListensToFluxStore(
-  ({ listSource, editing, perspective }) => (
-    <FocusContainer collection="contact">
-      <ContactDetailToolbarWithData
-        listSource={listSource}
-        editing={editing}
-        perspective={perspective}
-      />
-    </FocusContainer>
-  ),
-  {
-    stores: [Store],
-    getStateFromStores: () => ({
-      editing: Store.editing(),
-      listSource: Store.listSource(),
-      perspective: Store.perspective(),
-    }),
-  }
-);
+export const ContactDetailToolbar: React.FunctionComponent<ContactDetailToolbarProps> =
+  ListensToFluxStore(
+    ({ listSource, editing, perspective }) => (
+      <FocusContainer collection="contact">
+        <ContactDetailToolbarWithData
+          listSource={listSource}
+          editing={editing}
+          perspective={perspective}
+        />
+      </FocusContainer>
+    ),
+    {
+      stores: [Store],
+      getStateFromStores: () => ({
+        editing: Store.editing(),
+        listSource: Store.listSource(),
+        perspective: Store.perspective(),
+      }),
+    }
+  );
 
 ContactDetailToolbar.displayName = 'ContactDetailToolbar';

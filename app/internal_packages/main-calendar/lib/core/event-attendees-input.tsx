@@ -1,14 +1,14 @@
 import React from 'react';
 import _ from 'underscore';
-import { clipboard } from 'electron';
 import { Utils, Contact, ContactStore, RegExpUtils, localized } from 'mailspring-exports';
 import { TokenizingTextField, Menu, InjectedComponentSet } from 'mailspring-component-kit';
+import { EventAttendee } from './calendar-data-source';
 
-const TokenRenderer = (props: { token: Contact }) => {
-  const { email, cn } = props.token;
+const TokenRenderer = (props: { token: EventAttendee }) => {
+  const { email, name } = props.token;
   let chipText = email;
-  if (cn && cn.length > 0 && cn !== email) {
-    chipText = cn;
+  if (name && name.length > 0 && name !== email) {
+    chipText = name;
   }
   return (
     <div className="participant">
@@ -24,8 +24,8 @@ const TokenRenderer = (props: { token: Contact }) => {
 };
 
 interface EventAttendeesInputProps {
-  attendees: any[];
-  change: (next: any[]) => void;
+  attendees: EventAttendee[];
+  change: (next: EventAttendee[]) => void;
   className: string;
   onEmptied?: () => void;
   onFocus?: () => void;
@@ -34,7 +34,10 @@ interface EventAttendeesInputProps {
 export class EventAttendeesInput extends React.Component<EventAttendeesInputProps> {
   static displayName = 'EventAttendeesInput';
 
-  shouldComponentUpdate(nextProps, nextState) {
+  shouldComponentUpdate(
+    nextProps: EventAttendeesInputProps,
+    nextState: Record<string, unknown>
+  ): boolean {
     return !Utils.isEqualReact(nextProps, this.props) || !Utils.isEqualReact(nextState, this.state);
   }
 
@@ -44,11 +47,14 @@ export class EventAttendeesInput extends React.Component<EventAttendeesInputProp
     (this.refs.textField as HTMLInputElement).focus();
   };
 
-  _completionNode = p => {
+  _completionNode = (p: EventAttendee): React.ReactNode => {
     return <Menu.NameEmailContent name={p.name} email={p.email} />;
   };
 
-  _tokensForString = (string, options = {}) => {
+  _tokensForString = (
+    string: string,
+    options: Record<string, unknown> = {}
+  ): Promise<Contact[]> => {
     // If the input is a string, parse out email addresses and build
     // an array of contact objects. For each email address wrapped in
     // parentheses, look for a preceding name, if one exists.
@@ -56,7 +62,7 @@ export class EventAttendeesInput extends React.Component<EventAttendeesInputProp
       return Promise.resolve([]);
     }
 
-    return ContactStore.parseContactsInString(string, options).then(contacts => {
+    return ContactStore.parseContactsInString(string, options).then((contacts) => {
       if (contacts.length > 0) {
         return Promise.resolve(contacts);
       }
@@ -66,25 +72,23 @@ export class EventAttendeesInput extends React.Component<EventAttendeesInputProp
     });
   };
 
-  _remove = values => {
-    const updates = _.reject(
-      this.props.attendees,
-      p => values.includes(p.email) || values.map(o => o.email).includes(p.email)
-    );
+  _remove = (values: EventAttendee[]): void => {
+    const emailsToRemove = values.map((o) => o.email);
+    const updates = _.reject(this.props.attendees, (p) => emailsToRemove.includes(p.email));
     this.props.change(updates);
   };
 
-  _edit = (token, replacementString) => {
+  _edit = (token: EventAttendee, replacementString: string): void => {
     const tokenIndex = this.props.attendees.indexOf(token);
 
-    this._tokensForString(replacementString).then(replacements => {
+    this._tokensForString(replacementString).then((replacements) => {
       const updates = this.props.attendees.slice(0);
       updates.splice(tokenIndex, 1, ...replacements);
       this.props.change(updates);
     });
   };
 
-  _add = (values, options = {}) => {
+  _add = (values: string | EventAttendee[], options: Record<string, unknown> = {}): void => {
     // If the input is a string, parse out email addresses and build
     // an array of contact objects. For each email address wrapped in
     // parentheses, look for a preceding name, if one exists.
@@ -95,10 +99,10 @@ export class EventAttendeesInput extends React.Component<EventAttendeesInputProp
       tokensPromise = Promise.resolve(values);
     }
 
-    tokensPromise.then(tokens => {
+    tokensPromise.then((tokens) => {
       // Safety check: remove anything from the incoming tokens that isn't
       // a Contact. We should never receive anything else in the tokens array.
-      const contactTokens = tokens.filter(value => value instanceof Contact);
+      const contactTokens = tokens.filter((value) => value instanceof Contact);
       let updates = this.props.attendees.slice(0);
 
       for (const token of contactTokens) {
@@ -111,10 +115,11 @@ export class EventAttendeesInput extends React.Component<EventAttendeesInputProp
     });
   };
 
-  _onShowContextMenu = participant => {
+  _onShowContextMenu = (participant: EventAttendee): void => {
     // Warning: Menu is already initialized as Menu.cjsx!
     const MenuClass = require('@electron/remote').Menu;
     const MenuItem = require('@electron/remote').MenuItem;
+    const clipboard = require('@electron/remote').clipboard;
 
     const menu = new MenuClass();
     menu.append(
@@ -137,15 +142,19 @@ export class EventAttendeesInput extends React.Component<EventAttendeesInputProp
     menu.popup();
   };
 
-  _onInputTrySubmit = (inputValue, completions = [], selectedItem) => {
+  _onInputTrySubmit = (
+    inputValue: string,
+    completions: EventAttendee[] = [],
+    selectedItem?: EventAttendee
+  ): string | EventAttendee | undefined => {
     if (RegExpUtils.emailRegex().test(inputValue)) {
       return inputValue; // no token default to raw value.
     }
     return selectedItem || completions[0]; // first completion if any
   };
 
-  _shouldBreakOnKeydown = event => {
-    const val = event.target.value.trim();
+  _shouldBreakOnKeydown = (event: React.KeyboardEvent<HTMLInputElement>): boolean => {
+    const val = (event.target as HTMLInputElement).value.trim();
     if (RegExpUtils.emailRegex().test(val) && event.key === ' ') {
       return true;
     }
@@ -158,10 +167,14 @@ export class EventAttendeesInput extends React.Component<EventAttendeesInputProp
         className={this.props.className}
         ref="textField"
         tokens={this.props.attendees}
-        tokenKey={p => p.email}
-        tokenIsValid={p => ContactStore.isValidContact(p)}
+        tokenKey={(p) => p.email}
+        // An attendee is a plain {email, name, partstat} record read out of the event's ICS,
+        // never a Contact, so ContactStore.isValidContact - an `instanceof Contact` test -
+        // called every invitee invalid and drew the malformed-address underline under all of
+        // them. Validate the address itself.
+        tokenIsValid={(p) => new Contact({ email: p.email }).isValid()}
         tokenRenderer={TokenRenderer}
-        onRequestCompletions={input => ContactStore.searchContacts(input)}
+        onRequestCompletions={(input) => ContactStore.searchContacts(input)}
         shouldBreakOnKeydown={this._shouldBreakOnKeydown}
         onInputTrySubmit={this._onInputTrySubmit}
         completionNode={this._completionNode}

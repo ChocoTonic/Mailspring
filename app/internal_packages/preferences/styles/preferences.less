@@ -7,12 +7,10 @@
   input[type='checkbox'] {
     margin: 0 7px 0 0;
     position: relative;
-    top: -1px;
+    top: 1px;
   }
   input[type='radio'] {
     margin: 0 7px 0 0;
-    position: relative;
-    top: -1px;
   }
   select {
     margin: 4px 0 0 0;
@@ -63,6 +61,8 @@
     border-bottom: 1px solid @border-color-divider;
 
     .preferences-tabs {
+      display: flex;
+      flex-direction: row;
       padding-top: 10px;
       background-color: @source-list-bg;
 
@@ -228,7 +228,7 @@
       color: @text-color-very-subtle;
       .values {
         font-family: @font-family-monospace;
-        font-weight: 600;
+        font-weight: @font-weight-semi-bold;
         color: @text-color;
         display: inline-block;
         padding-left: @padding-small-horizontal;
@@ -276,12 +276,9 @@
     font-size: 0.95em;
     &:before {
       color: @color-info;
-      font-weight: 600;
+      font-weight: @font-weight-semi-bold;
       content: 'NOTE: ';
     }
-  }
-  .platform-linux-only {
-    display: none;
   }
 }
 
@@ -294,14 +291,6 @@ body.platform-win32 {
       .appearance-mode {
         border-radius: 0;
       }
-    }
-  }
-}
-
-body.platform-linux {
-  .preferences-wrap {
-    .platform-linux-only {
-      display: block;
     }
   }
 }

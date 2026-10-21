@@ -1,5 +1,4 @@
 import React from 'react';
-import { v4 } from 'uuid';
 import {
   Contact,
   localized,
@@ -7,6 +6,8 @@ import {
   SyncbackContactTask,
   AccountStore,
   ContactGroup,
+  DatabaseStore,
+  TaskQueue,
 } from 'mailspring-exports';
 import { isEqual } from 'underscore';
 import { FocusContainer, ListensToFluxStore, ScrollRegion } from 'mailspring-component-kit';
@@ -41,7 +42,7 @@ function emptyContactForAccountId(accountId: string) {
           addresses: [],
         }
       : {
-          vcf: `BEGIN:VCARD\r\nVERSION:3.0\r\nUID:${v4()}\r\nEND:VCARD\r\n`,
+          vcf: `BEGIN:VCARD\r\nVERSION:3.0\r\nUID:${crypto.randomUUID()}\r\nEND:VCARD\r\n`,
           href: '',
         };
 
@@ -60,9 +61,9 @@ class ContactDetailWithFocus extends React.Component<ContactDetailProps, Contact
     this.state = this.getStateForProps();
   }
 
-  componentDidUpdate(prevProps) {
-    const prevContact = prevProps.contacts.find(c => c.id === prevProps.focusedId);
-    const newContact = this.props.contacts.find(c => c.id === this.props.focusedId);
+  componentDidUpdate(prevProps: ContactDetailProps) {
+    const prevContact = prevProps.contacts?.find((c) => c.id === prevProps.focusedId);
+    const newContact = this.props.contacts?.find((c) => c.id === this.props.focusedId);
 
     if (isEqual(prevContact, newContact) && prevProps.editing === this.props.editing) return;
     if (newContact && this.props.editing !== newContact.id) Store.setEditing(false);
@@ -75,7 +76,7 @@ class ContactDetailWithFocus extends React.Component<ContactDetailProps, Contact
     const contact =
       editing === 'new' && 'accountId' in perspective
         ? emptyContactForAccountId(perspective.accountId)
-        : contacts.find(c => c.id === focusedId);
+        : contacts?.find((c) => c.id === focusedId);
 
     if (!contact) {
       return { metadata: null, data: null, contact: null };
@@ -105,6 +106,13 @@ class ContactDetailWithFocus extends React.Component<ContactDetailProps, Contact
       : SyncbackContactTask.forCreating({ contact, accountId: perspective.accountId });
     Actions.queueTask(task);
     Store.setEditing(false);
+
+    if (!contact.id) {
+      // The sync engine assigns the new contact's id during performLocal.
+      TaskQueue.waitForPerformLocal(task)
+        .then((t) => DatabaseStore.find<Contact>(Contact, t.contact.id).then((c) => c))
+        .then((created) => created && Actions.setFocus({ collection: 'contact', item: created }));
+    }
   };
 
   render() {
@@ -128,7 +136,7 @@ class ContactDetailWithFocus extends React.Component<ContactDetailProps, Contact
             <ContactDetailEdit
               data={data}
               contact={contact}
-              onChange={changes => this.setState({ data: { ...data, ...changes } })}
+              onChange={(changes) => this.setState({ data: { ...data, ...changes } })}
             />
           ) : (
             <ContactDetailRead data={data} contact={contact} metadata={metadata} groups={groups} />
@@ -136,11 +144,10 @@ class ContactDetailWithFocus extends React.Component<ContactDetailProps, Contact
         </ScrollRegion>
         {editing && (
           <div className="contact-edit-footer">
-            <button tabIndex={-1} className={`btn`} onClick={this.onCancel}>
+            <button className={`btn`} onClick={this.onCancel}>
               {localized('Cancel')}
             </button>
-            <div style={{ flex: 1 }} />
-            <button tabIndex={-1} className={`btn btn-emphasis`} onClick={this.onSaveChanges}>
+            <button className={`btn btn-emphasis`} onClick={this.onSaveChanges}>
               {localized('Save Changes')}
             </button>
           </div>

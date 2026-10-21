@@ -22,9 +22,9 @@ class MessageBodyProcessor {
   constructor() {
     this.resetCache();
 
-    DatabaseStore.listen(change => {
+    DatabaseStore.listen((change) => {
       if (change.objectClass === Message.name) {
-        change.objects.forEach(m => {
+        change.objects.forEach((m) => {
           const key = this._key(m);
           if (!this._recentlyProcessedD[key]) {
             return;
@@ -103,7 +103,7 @@ class MessageBodyProcessor {
       // Extra defer to ensure that subscribe never calls it's callback synchronously,
       // (In Node, callbacks should always be called after caller execution has finished)
       _.defer(() =>
-        this.retrieve(message).then(output => {
+        this.retrieve(message).then((output) => {
           if (this._subscriptions.includes(sub)) {
             callback(output);
           }
@@ -128,6 +128,14 @@ class MessageBodyProcessor {
     return output;
   }
 
+  /**
+   * The whole body, sanitized and formatted exactly as for display but without the length
+   * clip. Not cached: it is only needed when the user asks to see a clipped message in full.
+   */
+  async processUnclipped(message: Message) {
+    return this._process(message, { clip: false });
+  }
+
   retrieveCached(message: Message) {
     const key = this._key(message);
     if (this._recentlyProcessedD[key]) {
@@ -144,14 +152,14 @@ class MessageBodyProcessor {
     return message.id;
   }
 
-  async _process(message: Message) {
+  async _process(message: Message, { clip = true }: { clip?: boolean } = {}) {
     if (typeof message.body !== 'string') {
       return { body: '', clipped: false };
     }
 
     let body = message.body;
     let clipped = false;
-    if (body.length > this.MAX_DISPLAY_LENGTH) {
+    if (clip && body.length > this.MAX_DISPLAY_LENGTH) {
       // We clip messages at 300,000 characters to avoid bringing Chromium to
       // a crawl. We will display a "message clipped notice" later.
       body = body.substr(0, this.MAX_DISPLAY_LENGTH);
@@ -168,7 +176,7 @@ class MessageBodyProcessor {
     // Sanitizing <script> tags, etc. isn't necessary because we use CORS rules
     // to prevent their execution and sandbox content in the iFrame, but we still
     // want to remove contenteditable attributes and other strange things.
-    body = await SanitizeTransformer.run(body, SanitizeTransformer.Preset.UnsafeOnly);
+    body = await SanitizeTransformer.run(body);
 
     for (const extension of MessageStore.extensions()) {
       if (!extension.formatMessageBody) {
@@ -192,7 +200,7 @@ class MessageBodyProcessor {
     return { body, clipped };
   }
 
-  _addToCache(key, { body, clipped }) {
+  _addToCache(key: string, { body, clipped }: { body: string; clipped: boolean }) {
     if (this._recentlyProcessedA.length > 50) {
       const removed = this._recentlyProcessedA.pop();
       delete this._recentlyProcessedD[removed.key];

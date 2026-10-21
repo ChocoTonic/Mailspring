@@ -1,4 +1,5 @@
 const { localized } = require('../src/intl');
+const { developerToolsAvailable } = require('../src/developer-tools');
 
 module.exports = {
   menu: [
@@ -91,6 +92,7 @@ module.exports = {
           command: 'navigation:go-to-inbox',
           id: 'first',
         },
+        { label: localized('Go to %@', localized('Unread')), command: 'navigation:go-to-unread' },
         { label: localized('Go to %@', localized('Starred')), command: 'navigation:go-to-starred' },
         { label: localized('Go to %@', localized('Sent Mail')), command: 'navigation:go-to-sent' },
         { label: localized('Go to %@', localized('Drafts')), command: 'navigation:go-to-drafts' },
@@ -112,6 +114,7 @@ module.exports = {
         { label: localized('Reply'), command: 'core:reply' },
         { label: localized('Reply All'), command: 'core:reply-all' },
         { label: localized('Forward'), command: 'core:forward' },
+        { label: localized('Forward as Attachment'), command: 'core:forward-as-attachment' },
         { type: 'separator' },
         { label: localized('Mark as %@', localized('Unread')), command: 'core:mark-as-unread' },
         { label: localized('Mark as %@', localized('Read')), command: 'core:mark-as-read' },
@@ -132,6 +135,7 @@ module.exports = {
         { type: 'separator' },
         { label: localized('Share this thread') + '...', command: 'core:share-item-link' },
         { label: localized('Copy mailbox permalink'), command: 'core:copy-mailbox-link' },
+        { label: localized('Save as .eml...'), command: 'core:save-as-eml' },
         { type: 'separator' },
         { label: localized('Remove from view'), command: 'core:remove-from-view' },
         { label: localized('Remove and show next'), command: 'core:remove-and-next' },
@@ -160,19 +164,23 @@ module.exports = {
       id: 'Developer',
       label: localized('Developer'),
       submenu: [
-        {
-          label: localized('Run with Debug Flags'),
-          type: 'checkbox',
-          command: 'application:toggle-dev',
-        },
-        { type: 'separator' },
-        { label: localized('Calendar Preview'), command: 'application:show-calendar' },
-        { type: 'separator' },
+        ...(developerToolsAvailable()
+          ? [
+              {
+                label: localized('Run with Debug Flags'),
+                type: 'checkbox',
+                command: 'application:toggle-dev',
+              },
+              { type: 'separator' },
+            ]
+          : []),
         { label: localized('Create a Plugin') + '...', command: 'window:create-package' },
         { label: localized('Install a Plugin') + '...', command: 'window:install-package' },
         { type: 'separator' },
         { label: localized('Reload'), command: 'window:reload' },
-        { label: localized('Toggle Developer Tools'), command: 'window:toggle-dev-tools' },
+        ...(developerToolsAvailable()
+          ? [{ label: localized('Toggle Developer Tools'), command: 'window:toggle-dev-tools' }]
+          : []),
         {
           label: localized('Toggle Component Regions'),
           command: 'window:toggle-component-regions',
@@ -190,11 +198,8 @@ module.exports = {
         { label: localized('Minimize'), command: 'application:minimize' },
         { label: localized('Zoom'), command: 'application:zoom' },
         { type: 'separator' },
-        {
-          label: localized('Message Viewer'),
-          command: 'application:show-main-window',
-          accelerator: 'CmdOrCtrl+0',
-        },
+        { label: localized('Mail'), command: 'application:show-mail' },
+        { label: localized('Calendar'), command: 'application:show-calendar' },
         {
           label: localized('Contacts'),
           command: 'application:show-contacts',

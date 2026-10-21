@@ -8,11 +8,11 @@ export const DatePickerPopover: typeof import('../components/date-picker-popover
 export const Modal: typeof import('../components/modal').default;
 export const Webview: typeof import('../components/webview').default;
 export const FeatureUsedUpModal: typeof import('../components/feature-used-up-modal').default;
-export const BillingModal: typeof import('../components/billing-modal').default;
 export const OpenIdentityPageButton: typeof import('../components/open-identity-page-button').default;
 export * from '../components/flexbox';
 
 export * from '../components/retina-img';
+export { NavRailItem, NavRailSection } from '../components/nav-rail';
 export const SwipeContainer: typeof import('../components/swipe-container').default;
 export const FluxContainer: typeof import('../components/flux-container').default;
 export const FocusContainer: typeof import('../components/focus-container').default;
@@ -43,8 +43,10 @@ export const OutlineViewItem: typeof import('../components/outline-view-item').d
 export * from '../components/outline-view';
 export const DateInput: typeof import('../components/date-input').default;
 export * from '../components/mini-month-view';
+export * from '../components/snap-scroller';
 export * from '../components/date-picker';
 export const TimePicker: typeof import('../components/time-picker').default;
+export const ProposeTimePopover: typeof import('../components/propose-time-popover').ProposeTimePopover;
 export const Table: typeof import('../components/table/table').default;
 export const TableRow: typeof import('../components/table/table').TableRow;
 export const TableCell: typeof import('../components/table/table').TableCell;
@@ -56,6 +58,7 @@ export const EditableTableCell: typeof import('../components/editable-table').Ed
 export * from '../components/lazy-rendered-list';
 export * from '../components/attachment-items';
 export const CodeSnippet: typeof import('../components/code-snippet').default;
+export const CopyButton: typeof import('../components/copy-button').default;
 
 export * from '../components/composer-editor/composer-editor';
 export * from '../components/composer-editor/composer-editor-plaintext';
@@ -78,3 +81,4 @@ export const ListensToFluxStore: typeof import('../components/decorators/listens
 export const ListensToMovementKeys: typeof import('../components/decorators/listens-to-movement-keys').default;
 export const HasTutorialTip: typeof import('../components/decorators/has-tutorial-tip').default;
 export const CreateButtonGroup: typeof import('../components/decorators/create-button-group').default;
+export * from '../components/roving-tab-index-toolbar';

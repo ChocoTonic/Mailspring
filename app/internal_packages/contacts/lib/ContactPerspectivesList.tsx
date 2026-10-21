@@ -74,12 +74,13 @@ const OutlineViewForAccount = ({
 
     for (const group of groups) {
       const perspective = perspectiveForGroup(group);
+      const isSelectedGroup = selected?.type === 'group' && selected.groupId === group.id;
       items.push({
-        id: `${perspective.accountId}-${perspective.label}`,
+        id: group.id,
         name: perspective.label,
         iconName: 'label.png',
         children: [],
-        selected: isEqual(selected, perspective),
+        selected: isSelectedGroup,
         onSelect: () => onSelect(perspective),
         onEdited: (item, value: string) => {
           if (showGPeopleReadonlyNotice(account.id)) {
@@ -95,7 +96,9 @@ const OutlineViewForAccount = ({
         },
         onDrop: (item, { dataTransfer }) => {
           const data = JSON.parse(dataTransfer.getData('mailspring-contacts-data'));
-          const contacts = data.ids.map(i => Store.filteredContacts().find(c => c.id === i));
+          const contacts = data.ids
+            .map((i) => Store.filteredContacts().find((c) => c.id === i))
+            .filter(Boolean);
           if (!contacts.length) {
             return false;
           }
@@ -114,12 +117,12 @@ const OutlineViewForAccount = ({
           if (!dataTransfer.types.includes('mailspring-contacts-data')) {
             return false;
           }
-          if (isEqual(selected, perspective)) {
+          if (isSelectedGroup) {
             return false;
           }
           // We can't inspect the drag payload until drop, so we use a dataTransfer
           // type to encode the account IDs of threads currently being dragged.
-          const accountsType = dataTransfer.types.find(t => t.startsWith('mailspring-accounts='));
+          const accountsType = dataTransfer.types.find((t) => t.startsWith('mailspring-accounts='));
           const accountIds = (accountsType || '').replace('mailspring-accounts=', '').split(',');
 
           return isEqual(accountIds, [perspective.accountId]);
@@ -150,7 +153,7 @@ const OutlineViewForAccount = ({
       items={items}
       onItemCreated={
         books.length > 0
-          ? name => {
+          ? (name) => {
               if (showGPeopleReadonlyNotice(account.id)) {
                 return false;
               }
@@ -183,13 +186,13 @@ const ContactsPerspectivesWithData: React.FunctionComponent<ContactsPerspectives
         }}
       />
     </section>
-    {accounts.map(a => (
+    {accounts.map((a) => (
       <OutlineViewForAccount
         key={a.id}
         account={a}
         findInMailDisabled={findInMailDisabled.includes(a.id)}
-        books={books.filter(b => b.accountId === a.id)}
-        groups={groups.filter(b => b.accountId === a.id)}
+        books={books.filter((b) => b.accountId === a.id)}
+        groups={groups.filter((b) => b.accountId === a.id)}
         selected={'accountId' in selected && selected.accountId === a.id ? selected : null}
         onSelect={onSelect}
       />
@@ -205,7 +208,7 @@ export const ContactPerspectivesList = ListensToObservable(
       books: Store.books(),
       groups: Store.groups(),
       selected: Store.perspective(),
-      onSelect: s => Store.setPerspective(s),
+      onSelect: (s) => Store.setPerspective(s),
     }),
   }),
   {

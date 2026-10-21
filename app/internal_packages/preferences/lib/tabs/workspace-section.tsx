@@ -1,5 +1,4 @@
 import React from 'react';
-import PropTypes from 'prop-types';
 import { localized, DefaultClientHelper, SystemStartService } from 'mailspring-exports';
 import { shell } from 'electron';
 
@@ -28,9 +27,9 @@ class DefaultMailClientItem extends React.Component<
     if (helper.available()) {
       await Promise.delay(DELAY_FOR_SHEET_ANIMATION);
       if (!this._mounted) return;
-      helper.isRegisteredForURLScheme('mailto', registered => {
+      helper.isRegisteredForURLScheme('mailto', (registered) => {
         if (!this._mounted) return;
-        this.setState({ defaultClient: registered });
+        this.setState({ defaultClient: registered instanceof Error ? 'unknown' : registered });
       });
     }
   }
@@ -39,7 +38,7 @@ class DefaultMailClientItem extends React.Component<
     this._mounted = false;
   }
 
-  toggleDefaultMailClient = event => {
+  toggleDefaultMailClient = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (this.state.defaultClient) {
       this.setState({ defaultClient: false });
       helper.resetURLScheme('mailto');
@@ -57,11 +56,15 @@ class DefaultMailClientItem extends React.Component<
           <div
             style={{ marginBottom: 12 }}
             className="btn btn-small"
-            onClick={() =>
-              shell.openExternal(
-                'https://community.getmailspring.com/t/choose-mailspring-as-the-default-mail-client-on-linux/191'
-              )
-            }
+            onClick={() => {
+              if (process.platform === 'win32') {
+                helper.registerForURLScheme('mailto');
+              } else {
+                shell.openExternal(
+                  'https://getmailspring.com/docs/choose-mailspring-as-the-default-mail-client-on-linux'
+                );
+              }
+            }}
           >
             {localized('Use Mailspring as default mail client')}
           </div>
@@ -113,7 +116,7 @@ class LaunchSystemStartItem extends React.Component {
     this._mounted = false;
   }
 
-  _toggleLaunchOnStart = event => {
+  _toggleLaunchOnStart = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (this.state.launchOnStart) {
       this.setState({ launchOnStart: false });
       service.dontLaunchOnSystemStart();
@@ -141,7 +144,7 @@ class LaunchSystemStartItem extends React.Component {
   }
 }
 
-const WorkspaceSection = props => {
+const WorkspaceSection = (props: { config: any; configSchema: any }) => {
   return (
     <section>
       <DefaultMailClientItem />
@@ -178,18 +181,15 @@ const WorkspaceSection = props => {
         config={props.config}
       />
 
-      <div className="platform-note platform-linux-only">
-        {localized(
-          `"Launch on system start" only works in XDG-compliant desktop environments. To enable the Mailspring icon in the system tray, you may need to install libappindicator.`
-        )}
-      </div>
+      {process.platform === 'linux' && (
+        <div className="platform-note">
+          {localized(
+            `"Launch on system start" only works in XDG-compliant desktop environments. To enable the Mailspring icon in the system tray, you may need to install libappindicator or libayatana-appindicator.`
+          )}
+        </div>
+      )}
     </section>
   );
-};
-
-WorkspaceSection.propTypes = {
-  config: PropTypes.object,
-  configSchema: PropTypes.object,
 };
 
 export default WorkspaceSection;

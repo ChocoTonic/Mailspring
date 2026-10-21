@@ -1,8 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom';
-import PropTypes from 'prop-types';
 import moment from 'moment';
 import classnames from 'classnames';
+import { TabGroupContext } from 'mailspring-component-kit';
 
 require('moment-round'); // overrides moment
 
@@ -10,7 +10,7 @@ const INTERVAL: [any, string] = [30, 'minutes'];
 
 type TimePickerProps = {
   value?: number;
-  onChange?: (...args: any[]) => any;
+  onChange?: (ms: number) => void;
   relativeTo?: number;
 };
 type TimePickerState = {
@@ -21,15 +21,8 @@ type TimePickerState = {
 export default class TimePicker extends React.Component<TimePickerProps, TimePickerState> {
   static displayName = 'TimePicker';
 
-  static propTypes = {
-    value: PropTypes.number,
-    onChange: PropTypes.func,
-    relativeTo: PropTypes.number, // TODO For `renderTimeOptions`
-  };
-
-  static contextTypes = {
-    parentTabGroup: PropTypes.object,
-  };
+  static contextType = TabGroupContext;
+  context!: React.ContextType<typeof TabGroupContext>;
 
   static defaultProps = {
     value: moment().valueOf(),
@@ -50,11 +43,10 @@ export default class TimePicker extends React.Component<TimePickerProps, TimePic
     this._fixTimeOptionScroll();
   }
 
-  componentWillReceiveProps(newProps) {
-    this.setState({ rawText: this._valToTimeString(newProps.value) });
-  }
-
-  componentDidUpdate() {
+  componentDidUpdate(prevProps: TimePickerProps) {
+    if (prevProps.value !== this.props.value) {
+      this.setState({ rawText: this._valToTimeString(this.props.value) });
+    }
     if (this._gotoScrollStartOnUpdate) {
       this._fixTimeOptionScroll();
     }
@@ -64,7 +56,7 @@ export default class TimePicker extends React.Component<TimePickerProps, TimePic
     return moment(value).format('LT');
   }
 
-  _onKeyDown = event => {
+  _onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowUp') {
       event.preventDefault();
       this._onArrow(event.key);
@@ -72,7 +64,7 @@ export default class TimePicker extends React.Component<TimePickerProps, TimePic
       event.preventDefault();
       this._onArrow(event.key);
     } else if (event.key === 'Enter') {
-      this.context.parentTabGroup.shiftFocus(1);
+      this.context?.shiftFocus(1);
     }
   };
 
@@ -88,7 +80,7 @@ export default class TimePicker extends React.Component<TimePickerProps, TimePic
       return;
     }
     this._gotoScrollStartOnUpdate = true;
-    this.props.onChange(newT);
+    this.props.onChange(newT.valueOf());
   }
 
   _onFocus = () => {
@@ -98,27 +90,52 @@ export default class TimePicker extends React.Component<TimePickerProps, TimePic
     el.setSelectionRange(0, el.value.length);
   };
 
-  _onBlur = event => {
+  _onBlur = (event: React.FocusEvent<HTMLInputElement>) => {
     this.setState({ focused: false });
-    if (event.relatedTarget && Array.from(event.relatedTarget.classList).includes('time-options')) {
+    if (
+      event.relatedTarget &&
+      Array.from((event.relatedTarget as Element).classList).includes('time-options')
+    ) {
       return;
     }
     this._saveIfValid(this.state.rawText);
   };
 
-  _onRawTextChange = event => {
+  _onRawTextChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     this.setState({ rawText: event.target.value });
   };
 
   _saveIfValid(rawText = '') {
+    // Compare the rendered text, not the parsed instant: re-parsing an ambiguous fall-back
+    // wall clock re-resolves it to the earlier offset.
+    if (rawText.trim() === this._valToTimeString(this.props.value)) {
+      return;
+    }
     // Locale-aware am/pm parsing!!
     const parsedMoment = moment(rawText, 'h:ma');
     if (parsedMoment.isValid()) {
       if (this._shouldAddTwelve(rawText) && parsedMoment.hour() < 12) {
-        parsedMoment.add(12, 'hours');
+        parsedMoment.hour(parsedMoment.hour() + 12);
       }
-      this.props.onChange(parsedMoment.valueOf());
+      // 'h:ma' has no date tokens, so moment fills y/m/d from today.
+      const valueMoment = moment(this.props.value);
+      parsedMoment.year(valueMoment.year());
+      parsedMoment.dayOfYear(valueMoment.dayOfYear());
+
+      if (parsedMoment.valueOf() !== this.props.value) {
+        this.props.onChange(parsedMoment.valueOf());
+        return;
+      }
     }
+    // Nothing was emitted, so props.value will not change and componentDidUpdate will not
+    // re-derive the text. Put the field back on the time it is meant to be showing.
+    this.setState({ rawText: this._valToTimeString(this.props.value) });
+  }
+
+  // moment's LT uses h for a 12-hour clock and H for a 24-hour one. Test the hour token rather
+  // than the meridiem: lb writes "H:mm [Auer]" and si writes "a h:mm".
+  _isTwelveHourLocale() {
+    return /h/.test(moment.localeData().longDateFormat('LT'));
   }
 
   /*
@@ -127,10 +144,13 @@ export default class TimePicker extends React.Component<TimePickerProps, TimePic
    * (no meridiem indicators) and very basic use cases.
    */
   _shouldAddTwelve(rawText) {
+    if (!this._isTwelveHourLocale()) {
+      return false;
+    }
     const simpleDigitMatch = rawText.match(/^(\d{1,2})(:\d{1,2})?$/);
     if (simpleDigitMatch && simpleDigitMatch.length > 0) {
       const hr = parseInt(simpleDigitMatch[1], 10);
-      if (hr <= 7) {
+      if (hr >= 1 && hr <= 7) {
         return true;
       }
     }
@@ -164,9 +184,7 @@ export default class TimePicker extends React.Component<TimePickerProps, TimePic
     const firstVisibleMoment = moment(roundedMoment);
     firstVisibleMoment.add(...INTERVAL);
 
-    let startVal = moment(this.props.value)
-      .startOf('day')
-      .valueOf();
+    let startVal = moment(this.props.value).startOf('day').valueOf();
     startVal = Math.max(startVal, this.props.relativeTo || 0);
 
     const startMoment = moment(startVal);

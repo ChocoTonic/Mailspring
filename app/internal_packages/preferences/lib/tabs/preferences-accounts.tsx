@@ -1,12 +1,13 @@
 import React from 'react';
 import { ipcRenderer } from 'electron';
-import { AccountStore, Actions, Account } from 'mailspring-exports';
+import { AccountStore, Actions, Account, OnlineStatusStore } from 'mailspring-exports';
 import PreferencesAccountList from './preferences-account-list';
 import PreferencesAccountDetails from './preferences-account-details';
 
 interface PreferencesAccountsState {
   accounts: Account[];
   selected: Account;
+  offlineAccountIds: string[];
 }
 
 class PreferencesAccounts extends React.Component<
@@ -15,7 +16,7 @@ class PreferencesAccounts extends React.Component<
 > {
   static displayName = 'PreferencesAccounts';
 
-  unsubscribe: () => void;
+  unsubscribers: (() => void)[] = [];
 
   constructor(props) {
     super(props);
@@ -23,20 +24,21 @@ class PreferencesAccounts extends React.Component<
   }
 
   componentDidMount() {
-    this.unsubscribe = AccountStore.listen(this._onAccountsChanged);
+    this.unsubscribers = [
+      AccountStore.listen(this._onAccountsChanged),
+      OnlineStatusStore.listen(this._onAccountsChanged),
+    ];
   }
 
   componentWillUnmount() {
-    if (this.unsubscribe) {
-      this.unsubscribe();
-    }
+    this.unsubscribers.forEach((unsubscribe) => unsubscribe());
   }
 
   getStateFromStores({ selected }: { selected?: Account } = {}) {
     const accounts = AccountStore.accounts();
     let selectedAccount;
     if (selected) {
-      selectedAccount = accounts.find(a => a.id === selected.id);
+      selectedAccount = accounts.find((a) => a.id === selected.id);
     }
     // If selected was null or no longer exists in the AccountStore,
     // just use the first account.
@@ -46,6 +48,7 @@ class PreferencesAccounts extends React.Component<
     return {
       accounts,
       selected: selectedAccount,
+      offlineAccountIds: OnlineStatusStore.offlineAccountIds(),
     };
   }
 
@@ -82,15 +85,19 @@ class PreferencesAccounts extends React.Component<
           <PreferencesAccountList
             accounts={this.state.accounts}
             selected={this.state.selected}
+            offlineAccountIds={this.state.offlineAccountIds}
             onAddAccount={this._onAddAccount}
             onReorderAccount={this._onReorderAccount}
             onSelectAccount={this._onSelectAccount}
             onRemoveAccount={this._onRemoveAccount}
           />
-          <PreferencesAccountDetails
-            account={this.state.selected}
-            onAccountUpdated={this._onAccountUpdated}
-          />
+          {this.state.selected && (
+            <PreferencesAccountDetails
+              account={this.state.selected}
+              isOffline={this.state.offlineAccountIds.includes(this.state.selected.id)}
+              onAccountUpdated={this._onAccountUpdated}
+            />
+          )}
         </div>
       </div>
     );

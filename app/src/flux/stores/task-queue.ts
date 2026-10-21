@@ -4,6 +4,17 @@ import { Rx } from 'mailspring-exports';
 import { Task } from '../tasks/task';
 import DatabaseStore from './database-store';
 
+// TaskQueue is constructed as a module-level side effect below (`export default
+// new TaskQueue()`), and its constructor calls `Rx.Observable.fromQuery`, which
+// only exists once `mailspring-observables` has run and patched it onto Rx.
+// That normally happens because app-env.ts requires 'mailspring-observables'
+// before 'mailspring-exports', but nothing enforces that ordering when this
+// module is required directly or transitively before that point (this exact
+// scenario has caused "Rx.Observable.fromQuery is not a function" crashes in
+// production). Importing it here guarantees the patch is applied before we
+// construct the singleton below, regardless of require order elsewhere.
+import 'mailspring-observables';
+
 /*
 Public: The TaskQueue is a Flux-compatible Store that manages a queue of {Task}
 objects. Each {Task} represents an individual API action, like sending a draft
@@ -56,14 +67,14 @@ class TaskQueue extends MailspringStore {
     );
   }
 
-  _onQueueChangedDebounced = _.throttle(tasks => {
+  _onQueueChangedDebounced = _.throttle((tasks: Task[]) => {
     const finished = [Task.Status.Complete, Task.Status.Cancelled];
-    this._queue = tasks.filter(t => !finished.includes(t.status));
-    this._completed = tasks.filter(t => finished.includes(t.status));
+    this._queue = tasks.filter((t) => !finished.includes(t.status));
+    this._completed = tasks.filter((t) => finished.includes(t.status));
     const all = [...this._queue, ...this._completed];
 
-    this._waitingForLocal.filter(({ task, resolve }) => {
-      const match = all.find(t => task.id === t.id);
+    this._waitingForLocal = this._waitingForLocal.filter(({ task, resolve }) => {
+      const match = all.find((t) => task.id === t.id);
       if (match && match.hasRunLocally()) {
         resolve(match);
         return false;
@@ -71,8 +82,8 @@ class TaskQueue extends MailspringStore {
       return true;
     });
 
-    this._waitingForRemote.filter(({ task, resolve }) => {
-      const match = this._completed.find(t => task.id === t.id);
+    this._waitingForRemote = this._waitingForRemote.filter(({ task, resolve }) => {
+      const match = this._completed.find((t) => task.id === t.id);
       if (match) {
         resolve(match);
         return false;
@@ -103,7 +114,7 @@ class TaskQueue extends MailspringStore {
     const type = typeof typeOrClass === 'string' ? typeOrClass : typeOrClass.name;
     const tasks = includeCompleted ? [...this._queue, ...this._completed] : this._queue;
 
-    const matches = tasks.filter(task => {
+    const matches = tasks.filter((task) => {
       if (task.constructor.name !== type) {
         return false;
       }
@@ -117,23 +128,29 @@ class TaskQueue extends MailspringStore {
   }
 
   waitForPerformLocal = <T extends Task>(task: T) => {
-    const upToDateTask = [...this._queue, ...this._completed].find(t => t.id === task.id);
+    // In Playwright E2E tests, mailsync is not running so tasks are never
+    // executed. Resolve immediately to unblock draft creation and other flows.
+    if (process.env.PLAYWRIGHT) {
+      return Promise.resolve(task);
+    }
+
+    const upToDateTask = [...this._queue, ...this._completed].find((t) => t.id === task.id);
     if (upToDateTask && upToDateTask.hasRunLocally()) {
       return Promise.resolve(upToDateTask as T);
     }
 
-    return new Promise<T>(resolve => {
+    return new Promise<T>((resolve) => {
       this._waitingForLocal.push({ task, resolve });
     });
   };
 
   waitForPerformRemote = <T extends Task>(task: T) => {
-    const upToDateTask = [...this._queue, ...this._completed].find(t => t.id === task.id);
+    const upToDateTask = [...this._queue, ...this._completed].find((t) => t.id === task.id);
     if (upToDateTask && upToDateTask.status === Task.Status.Complete) {
       return Promise.resolve<T>(upToDateTask as T);
     }
 
-    return new Promise<T>(resolve => {
+    return new Promise<T>((resolve) => {
       this._waitingForRemote.push({ task, resolve });
     });
   };

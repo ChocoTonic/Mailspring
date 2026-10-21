@@ -1,5 +1,4 @@
 import React from 'react';
-import PropTypes from 'prop-types';
 import DraftStore from '../flux/stores/draft-store';
 import * as Actions from '../flux/actions';
 import * as Utils from '../flux/models/utils';
@@ -12,20 +11,31 @@ function InflatesDraftClientId(
 > {
   return class extends React.Component<
     { headerMessageId: string; onDraftReady: () => void } & React.HTMLProps<HTMLElement>,
-    { draft: Message; session: DraftEditingSession }
+    { draft: Message; session: DraftEditingSession; _lastHeaderMessageId: string }
   > {
     static displayName = ComposedComponent.displayName;
-
-    static propTypes = {
-      headerMessageId: PropTypes.string,
-      onDraftReady: PropTypes.func,
-    };
 
     static defaultProps = {
       onDraftReady: () => {},
     };
 
     static containerRequired = false;
+
+    static getDerivedStateFromProps(
+      props: { headerMessageId: string; onDraftReady: () => void },
+      state: { draft: Message; session: DraftEditingSession; _lastHeaderMessageId: string }
+    ) {
+      // If headerMessageId prop has changed, clear draft and session state
+      // to prevent rendering with mismatched data
+      if (props.headerMessageId !== state._lastHeaderMessageId) {
+        return {
+          draft: null,
+          session: null,
+          _lastHeaderMessageId: props.headerMessageId,
+        };
+      }
+      return null;
+    }
 
     _mounted = false;
     _sessionUnlisten?: () => void;
@@ -35,6 +45,7 @@ function InflatesDraftClientId(
       this.state = {
         session: null,
         draft: null,
+        _lastHeaderMessageId: props.headerMessageId,
       };
     }
 
@@ -49,10 +60,12 @@ function InflatesDraftClientId(
       this._deleteDraftIfEmpty();
     }
 
-    componentWillReceiveProps(newProps) {
-      if (newProps.headerMessageId !== this.props.headerMessageId) {
+    componentDidUpdate(prevProps: { headerMessageId: string; onDraftReady: () => void }) {
+      if (prevProps.headerMessageId !== this.props.headerMessageId) {
+        // getDerivedStateFromProps has already cleared draft/session state before render
+        // Now we just need to teardown the old draft and prepare for the new one
         this._teardownForDraft();
-        this._prepareForDraft(newProps.headerMessageId);
+        this._prepareForDraft(this.props.headerMessageId);
       }
     }
 

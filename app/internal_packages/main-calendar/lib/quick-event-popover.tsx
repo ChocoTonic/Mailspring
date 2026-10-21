@@ -1,6 +1,11 @@
 import React from 'react';
-import { Actions, Calendar, DatabaseStore, DateUtils, Event, localized } from 'mailspring-exports';
+import { Actions, Calendar, DatabaseStore, DateUtils, localized } from 'mailspring-exports';
 import { Moment } from 'moment';
+import {
+  getEditableCalendars,
+  showNoEditableCalendarsError,
+  createCalendarEvent,
+} from './core/calendar-helpers';
 
 interface QuickEventPopoverState {
   start: Moment | null;
@@ -21,11 +26,9 @@ export class QuickEventPopover extends React.Component<
     };
   }
 
-  onInputKeyDown = event => {
-    const {
-      key,
-      target: { value },
-    } = event;
+  onInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    const { key } = event;
+    const { value } = event.target as HTMLInputElement;
     if (value.length > 0 && ['Enter', 'Return'].includes(key)) {
       // This prevents onInputChange from being fired
       event.stopPropagation();
@@ -34,7 +37,7 @@ export class QuickEventPopover extends React.Component<
     }
   };
 
-  onInputChange = event => {
+  onInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     this.setState(DateUtils.parseDateString(event.target.value));
   };
 
@@ -48,37 +51,21 @@ export class QuickEventPopover extends React.Component<
     end: Moment;
   }) => {
     const allCalendars = await DatabaseStore.findAll<Calendar>(Calendar);
-    const editableCals = allCalendars.filter(c => !c.readOnly);
+    const disabledCalendars: string[] = AppEnv.config.get('mailspring.disabledCalendars') || [];
+    const editableCals = getEditableCalendars(allCalendars, disabledCalendars);
     if (editableCals.length === 0) {
-      AppEnv.showErrorDialog(
-        localized(
-          "This account has no editable calendars. We can't create an event for you. Please make sure you have an editable calendar with your account provider."
-        )
-      );
+      showNoEditableCalendarsError();
       return;
     }
 
-    const event = new Event({
+    await createCalendarEvent({
+      summary: leftoverText,
+      start: start.toDate(),
+      end: end.toDate(),
+      isAllDay: false,
       calendarId: editableCals[0].id,
       accountId: editableCals[0].accountId,
-      start: start.unix(),
-      end: end.unix(),
-      when: {
-        start_time: start.unix(),
-        end_time: end.unix(),
-      },
-      title: leftoverText,
     });
-
-    console.log(event);
-
-    // todo bg
-    // return DatabaseStore.inTransaction((t) => {
-    //   return t.persistModel(event)
-    // }).then(() => {
-    //   const task = new SyncbackEventTask(event.id);
-    //   Actions.queueTask(task);
-    // })
   };
 
   render() {

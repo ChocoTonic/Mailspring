@@ -1,5 +1,1007 @@
 # Mailspring Changelog
 
+## 1.26.0 (10/1/2026)
+
+This is a major sync reliability release - The sync engine now tracks every folder a message lives in, rather than forcing each message into a single folder. This permanently fixes mail "flickering" between folders or disappearing from the Inbox when the same message exists in two places — a long-standing issue for iCloud users, self-addressed mail that lands in both Inbox and Sent, Exchange's duplicate Sent copies, and ProtonMail labels. (#2891) This refactor was enabled by a huge new suite of automated mailsync tests that run against real Dovecot, Cyrus in Docker and fake problematic IMAP servers.
+
+Features:
+
+- Folder and unread counts left wrong by previous versions are repaired automatically on upgrade. Thanks @dansleboby!
+- Calendars now refresh every 15 minutes instead of every 45, so invitations accepted on another device or meetings moved by the organizer show up sooner. Contacts sync slightly less often to conserve Google API quota. Thanks @brhellman!
+- After an event is saved or deleted, Mailspring re-reads the calendar from the server so the event reflects what the server actually stored. (#2915) Thanks @brhellman!
+- Calendars deleted or unshared on the server are now removed from Mailspring along with their events. Thanks @brhellman!
+- Mailspring now records whether each calendar is your own or shared with you, so RSVPs are never written onto someone else's calendar. (#2916) Thanks @brhellman!
+- Day and week calendar views now draw events with the same chip style as the month view, and selected events fill with the calendar's own color. (#2895) Thanks @manilabui!
+
+Security:
+
+- Links in print preview, quick-preview and "show original" windows now open in your browser instead of loading the remote page in the window.
+- Links from auxiliary windows only open in your browser after a real click or keypress, so a meta refresh in a message can no longer open a page on its own.
+- "Show All" on a clipped message now sanitizes the message body and blocks remote images like the reading pane.
+- Replying, forwarding and sending no longer fetch remote images referenced by the message when automatic image loading is off. Opening an event's notes no longer fetches images referenced by its description, which could tell the sender you opened the invitation. (#2901) Thanks @brhellman!
+- A malicious event UID can no longer cause the sync engine to write outside the calendar collection on the CalDAV server. Thanks @brhellman!
+
+Bug Fixes:
+
+- Fixed duplicate Sent copies appearing on Exchange Online, Gmail, Yahoo and Zoho, which file their own copy of sent mail.
+- On servers without IMAP MOVE, moving a message no longer permanently erases other messages another client had only marked for deletion (e.g. Outlook's "mark for deletion" mode).
+- Fixed several provider quirks: folder roles detected by name and `\Archive` support, servers reporting UIDNEXT 0, Coremail/NetEase servers that require an ID command, and servers that refuse LIST being treated as missing folders.
+- Fixed mail rules not applying to self-addressed messages whose Inbox copy arrived after the Sent copy.
+- Fixed the Unread view's recently-read threads leaking across views. (#2905) Thanks @dansleboby!
+- Fixed Gmail messages losing text the sender placed inside the signature block when there was no quoted text. (#2902) Thanks @dansleboby!
+- On Linux, fixed two title bars appearing on KDE and GNOME for users who never chose a menubar style. (#2903) Thanks @dansleboby!
+- Fixed blank lines appearing in the inline reply composer. (#2896) Thanks @arnonuem!
+- Fixed adding some Google Workspace and Office 365 accounts by always using the provider's servers for OAuth accounts. (#2907) Thanks @Jorl17!
+- Fixed the Send button silently doing nothing when a draft's From address matches no account or alias; Mailspring now explains the problem. (#2910)
+- Carriage returns are stripped from text dropped into the composer. (#2908)
+- Fixed Google contacts with a birthday but no date failing to open in the contact editor. (#2912)
+- Fixed an error when a sound effect can't be decoded. (#2911)
+- Malformed URLs passed to Mailspring on launch are now ignored. (#2913)
+- On macOS 27, notifications now respect the system "Play sound for notifications" setting and Focus modes, and the notification sound plays correctly.
+- On macOS, fixed the window not being draggable beneath the window controls.
+- Updated Electron to 44.5.1 to fix webview detach errors. (#2909)
+- Mailspring now tells you when the server rejects an event save instead of leaving the unsaved edit on screen. (#2914) Thanks @brhellman!
+- Fixed RSVPs to recurring events including other guests' attendance in the replies for moved or modified occurrences. (#2917) Thanks @brhellman!
+- Fixed recurring events created in winter showing an hour off in summer: VTIMEZONEs now carry the zone's daylight saving rules, including every offset change. (#2885, #2900) Thanks @brhellman!
+- Fixed Outlook and Exchange events using Windows zone names ("Central Standard Time") being shifted to your machine's time zone when edited. (#2897) Thanks @brhellman!
+- Fixed an invitation that redefines the UTC zone shifting every UTC time for the rest of the session. (#2898) Thanks @brhellman!
+- Fixed UTC timestamps in calendar data being read as local time. Thanks @brhellman!
+- Fixed deleting a single occurrence of a recurring event deleting the entire series on the server. Thanks @brhellman!
+- Fixed accepting an invitation already present on the calendar failing as a duplicate create. Thanks @brhellman!
+- Fixed every calendar being marked read-only on servers that omit or aggregate privilege information. Thanks @brhellman!
+- Fixed Fastmail/Cyrus scheduling Inbox and Outbox collections appearing as calendars, and DAV principal discovery on some servers. Thanks @brhellman!
+- Fixed RSVP emails violating MIME line-length and encoding rules, which some mail servers refuse. Mailspring also accepts iTIP COUNTER proposals when responding. Thanks @brhellman!
+- Fixed a failing manual calendar refresh aborting the sync process. Thanks @brhellman!
+- Fixed CalDAV and CardDAV discovery on servers that use 303, 307 or 308 redirects from `/.well-known`. Thanks @Alintya!
+- Fixed a blur on a calendar time field moving the event to today, a timed event losing its time when its day is changed, and a bare hour like "3" always being read as PM. (#2890, #2892, #2893) Thanks @manilabui!
+- Fixed all-day event saves writing the wrong date span. (#2894) Thanks @manilabui!
+- Fixed event notes missing when the description begins with `itemprop=description` meta tags.
+
+Improvements:
+
+- The offline indicator is a less aggressive gray, and coming back online re-syncs your accounts immediately, clearing the indicator.
+
+Developer:
+
+- Added an extensive fakeimap, Cyrus and Dovecot test suite for the sync engine.
+- Updated out of date GitHub Actions versions.
+- Fixed Playwright assertions for the macOS 27 navigation bar.
+
+## 1.25.0 (9/19/2026)
+
+Features:
+
+- The Activity panel has been redesigned around three tabs: a new **Feed** tab lists every open and click with search, filtering, grouping by recipient or message, collapsing of repeated events and CSV export; a new **Engagement** tab ranks your recipients by how much they open and click your mail; and **Reports** has a new design with more charts.
+- Added a "Go to Unread" navigation command (`g u` in the Gmail shortcut set), listed under View in the menu bar and rebindable from Preferences > Shortcuts.
+- On macOS, the base theme now matches the macOS 27 toolbar and window styling.
+
+Security:
+
+This version includes several patches for security vulnerabilities and is recommended for all users. Thanks 홍서연 at ENKI WhiteHat for detailed investigation and reporting.
+
+Bug Fixes:
+
+- Fixed initial sync silently dropping messages on servers that advertise CONDSTORE and QRESYNC (FastMail, Dovecot, Zoho and others). Only the first 1024 messages of each 5000-message chunk were ingested.
+- Fixed QRESYNC VANISHED handling that could unlink an entire folder's messages or drop expunges permanently on CONDSTORE+QRESYNC servers.
+- Fixed a crash loop when an IMAP server or gateway (DavMail, Proton Bridge, Zoho) lists the same mailbox twice.
+- Fixed Inbox and Sent appearing empty, with messages flickering between folders, on non-Gmail accounts that expose an `\All` mailbox. Messages that exist in both Inbox and Sent now consistently resolve to one folder.
+- Fixed SMTP connections failing on servers that enforce RFC 5321's requirement that EHLO/HELO carry a fully qualified domain name or address literal.
+- Fixed a sync-engine crash on launch when two accounts started contact sync in the same second and generated identical contact IDs. Random IDs are now seeded from the OS entropy source.
+- Fixed malformed OAuth token responses crashing the sync engine, and a task with a null JSON field wedging it.
+- Fixed Proton accounts losing their container folder, which placed Mailspring's helper folders (Snoozed) in the wrong place. `proton.me` addresses are now recognized, and Thunderbird autoconfig no longer overrides Mailspring's provider settings. (#2886)
+- Fixed adding a Gmail or Office 365 account while offline reporting "Unable to connect to the server / port you provided" instead of an offline error. (#2887)
+- Fixed the print window rendering inverted when the dark email render mode is enabled.
+- Fixed deleting a single moved occurrence of a recurring event deleting the entire series from the server. (#2866) Thanks @brhellman!
+- Fixed editing any field of a recurring event resetting its recurrence rule, so a fortnightly meeting became weekly and RDATE-only series lost their dates. (#2868) Thanks @brhellman!
+- Fixed moving a recurring series leaving its EXDATEs behind, so every cancelled occurrence came back on every guest's calendar. (#2867) Thanks @brhellman!
+- Fixed events with an IANA TZID whose VTIMEZONE the CalDAV server omitted (RFC 7809) reading as floating local time. (#2877) Thanks @brhellman!
+- Calendar edits now write DTSTAMP in UTC as required by RFC 5545. (#2873) Thanks @brhellman!
+- Fixed the calendar toolbar overlapping the date below ~800px wide, and day headings drifting from their columns. (#2870) Thanks @brhellman!
+- The event card and editor now scroll when they outgrow the window, so Save and Cancel are always reachable. (#2874, #2878) Thanks @brhellman!
+- Fixed a focused calendar event reopening its card and scrolling the grid on every re-render and view switch. (#2872) Thanks @brhellman! (#2882) Thanks @manilabui!
+- Fixed the time tooltip never appearing while dragging a calendar event. (#2871) Thanks @brhellman!
+- Fixed an invitation's date rendering in the same red as the conflict warning; the location is now a clickable link. (#2869) Thanks @brhellman!
+
+Improvements:
+
+- Knowledge base links throughout the app now point to the new documentation URLs.
+
+Developer:
+
+- The Windows build now fails if any shipped PE binary lacks a certificate table, and surfaces signtool's error when installer signing fails. (#2884)
+- Certificate failures in the sync engine are logged through MCLog instead of a stderr BIO.
+- Updated CONTRIBUTING.md with the current Node version and instructions for downloading mailsync.
+
+## 1.24.1 (9/14/2026)
+
+Features:
+
+- Added "Mark All as Read" to the folder context menu, and an option to show unread counts for all folders. Thanks @AnsCodeLab!
+- New drafts in a unified inbox now default to the account of the focused thread. Thanks @AnsCodeLab!
+- Added a `MessageActionMenuItem` extension point so plugins can add items to the message "..." menu. Thanks @AnsCodeLab!
+
+Bug Fixes:
+
+- On Linux, fixed accounts being lost after upgrading when the KWallet secret name changed. Mailspring now falls back to the previous secret storage key and re-saves credentials. (#2864) Thanks @LinusDierheimer!
+- Fixed mail rules breaking when a folder's ID changed right after it was created. Rules now match folders by name when the match is unambiguous.
+- Fixed the sidebar not switching from "Drafts" to "Activity" and other perspectives with the same layout.
+- Fixed reminders created in the draft UI missing the last reply timestamp, so they never fired.
+- Uploading a new signature image no longer overwrites the previous image on Mailspring's servers. Previously, replacing a signature image changed the image in emails you had already sent, and teams sharing a Mailspring ID could overwrite each other's default signature images.
+- On Windows, composer and thread popout windows no longer show a second title bar beneath the native one; press Alt in those windows to show the menu bar. Thanks @ejbiker93ss!
+- On Windows, the system tray icon is no longer blurry at 125% / 150% and other fractional display scales. Tray icons now ship as multi-size .ico files so Windows can pick an exact-match frame instead of stretching the 16px image.
+- Fixed popout windows sometimes opening with the wrong toolbar when a hot window is assigned a window type. Thanks @ejbiker93ss!
+- Fixed link and open tracking being lost when moving a draft between accounts.
+- When attaching multiple files to a draft, the file order is now preserved.
+- Pasting from Excel or OpenOffice now prefers the HTML clipboard content, and pasting several files at once attaches all of them, not just the first.
+- Pasted JPEG, GIF, BMP, and WebP clipboard images are now recognized so they stay inline in the composer. Thanks @AnsCodeLab!
+- Fixed some hardcoded colors in package stylesheets that did not follow the active theme.
+
+Improvements:
+
+- Emails with an explicit black text color (common in iCloud and Apple Mail signatures) are now shown white on dark background in dark mode, instead of a bright white background. (#2850)
+- The folder context menu is now grouped with separators.
+- On Windows, keyboard shortcuts are now shown with Ctrl / Alt / Shift instead of `mod` in the preferences.
+
+Developer:
+
+- The Claude Desktop MCP integration now uses a stdio bridge built into Mailspring instead of relying on `npx`.
+- `--spec-directory` now resolves relative paths and fails fast when the directory does not exist.
+
+## 1.24.0 (9/12/2026)
+
+Note: The Flatpak version of Mailspring now uses Portal for secret storage, and you may be prompted to re-authenticate accounts after upgrading.
+
+Note: Mailspring now requires macOS 13 (Ventura) or later, because Chromium has dropped support for macOS 12. Windows and Linux system requirements are unchanged.
+
+Features:
+
+- Added support for dragging threads into the composer to attach them as .eml files. (#2800)
+- Added subject line support to email templates. (#2794)
+- In the calendar, dragging an event now converts between all-day and timed. (#2819, #2812) Thanks @manilabui!
+- Added an MCP `get_attachment` tool so local agents can view mail attachments. (#2807) Thanks @ahmedwalid05!
+- On Windows, Mailspring now recovers from GPU-related renderer crashes that happen before the window loads by relaunching with hardware acceleration disabled. Thanks @ejbiker93ss!
+
+Bug Fixes:
+
+- Fixed a crash in the thread list context menu for threads with no participants. (#2839)
+- Fixed a composer crash when removing a link mark with no active mark present. (#2802)
+- Fixed a composer crash when applying a signature to an empty document. (#2804)
+- Fixed a composer crash when backspacing near an unpaired UTF-16 surrogate. (#2808)
+- Fixed a composer crash from an unset Slate selection point. (#2787)
+- Fixed a crash when the custom-fonts plugin activated during boot. (#2785)
+- Fixed a `ChangeLabelsTask` assertion failure when removing search results. (#2816)
+- Fixed a `TaskQueue` crash when queries loaded out of order. (#2786)
+- Fixed an uncaught "Unknown button clicked" crash in the config load-error dialog. (#2798)
+- Fixed all-day events losing or gaining a day across edit, drag, and recurring paths, including near DST transitions. (#2799, #2805, #2806, #2810) Thanks @manilabui!
+- Fixed resizing recurring events when applying the change to all events. (#2814) Thanks @manilabui!
+- Fixed calendar deletion and blocked edits on read-only calendars and past events. (#2797) Thanks @manilabui!
+- Fixed pasted text colors and line spacing on Windows. (#2796) Thanks @Mylosis!
+- Fixed scrollbars appearing in the inbox-zero animation. (#2821) Thanks @m-salman-afzal!
+- Fixed synchronization with NetEase IMAP servers. (#121) Thanks @aixia715!
+- Mailspring now falls back to legacy TLS settings when the handshake is rejected, and surfaces a suggestion when it does. (#119)
+- Fixed crash safety, XML escaping, and log hygiene issues in the sync engine. (#122) Thanks @brhellman!
+- On Linux, EROFS, EIO, ENOSPC, and EBADF are now swallowed alongside EPIPE in the stdout/stderr error handler. (#2789)
+- Plain text messages are no longer inverted in dark mode, causing black-on-dark-gray text.
+- Messages with stylesheets in the HTML `<head>` region now render with the styles intact.
+- Fixed recurring meetings whose series started years ago not appearing in the calendar. (#2845) Thanks @brhellman!
+- Fixed timed calendar events at midnight and across DST day boundaries rendering in the wrong day column or not at all. (#2847) Thanks @manilabui!
+- Fixed timed calendar events sitting off their gridlines on DST days. (#2852) Thanks @manilabui!
+- Fixed a timed event losing its time of day when its edge was dragged in month view. (#2858) Thanks @brhellman!
+- Fixed the calendar view jumping when an event was selected for the first time. (#2854) Thanks @brhellman!
+- Fixed the day/week calendar grid not scrolling to the end of the day in short windows. (#2851) Thanks @manilabui!
+- Fixed every calendar invitee being underlined as a malformed address. (#2844) Thanks @brhellman!
+- Fixed "Refresh Calendars" not actually syncing calendars. (#2853) Thanks @manilabui!
+- Fixed a TypeError when creating or editing calendar events with an organizer or attendees. Thanks @ejbiker93ss!
+- The calendar now syncs immediately after you RSVP to an invitation. Thanks @ejbiker93ss!
+- Fixed the mini month view's today marker not advancing past midnight. Thanks @ejbiker93ss!
+- Fixed Outlook-style read/unread keyboard shortcuts on Windows. (#2849) Thanks @ejbiker93ss!
+- Fixed "Reset Theme" after a theme compile error not recovering when the failing theme was set as the light or dark theme. Thanks @ejbiker93ss!
+- Fixed contact email addresses with surrounding whitespace failing validation or being sent as malformed recipients. Thanks @ejbiker93ss!
+- Mailsync startup failures now report the actual reason instead of "an unknown error has occurred". (#2827) Thanks @brhellman!
+- On macOS, Quick Look thumbnail generation now times out so hung `qlmanage` processes can't accumulate. (#2862) Thanks @nitay!
+- Fixed an unhandled promise rejection when opening identity links while signed out. (#2861)
+- Fixed the system tray icon not appearing on Linux when Mailspring launched before the desktop's tray host was ready, and when running in the Snap or Flatpak sandbox. (#2863, #2825)
+- Files copied from Finder, Explorer, or a Linux file manager and pasted into the composer now attach under their original filename instead of "Pasted File".
+
+Improvements:
+
+- Selected calendar events now stay selected and scroll into view when switching views. (#2815) Thanks @manilabui!
+- You can now drag across past events in the calendar to create a new event. (#2809) Thanks @manilabui!
+- Improved `Contact.fromString` parsing and the `Account.meUsingAlias` fallback. (#2793)
+- HTML signatures can now be pasted into the "Raw Signature" box.
+- On Linux, autostart now uses XDG Desktop Portals when running inside Flatpak. (#2838) Thanks @LinusDierheimer!
+- The key manager now uses the async `safeStorage` API. (#2823) Thanks @LinusDierheimer!
+- Removed the legacy dark-theme email inversion; the "Match app theme" email render mode is gone and email bodies now default to light mode. (#2850) Thanks @ejbiker93ss!
+
+Localization:
+
+- Added Swedish desktop and integration labels. (#2837) Thanks @yeager!
+- Updated the Czech translations. (#2855) Thanks @tomo90!
+- Completed the missing Traditional Chinese strings. (#2790) Thanks @nrps9909!
+- Updated the Hebrew translations and added Hebrew to the list of human-verified languages. (#2801) Thanks @omeritzics!
+- Updated translations of new strings and made minor corrections. (#2784) Thanks @Impostor0729!
+
+Developer:
+
+- Updated Electron from 41.7.2 to 44.3.0 (Chromium 152, Node.js 24.20). (#2818, #2825) Thanks @wrench-exile-legacy and @LinusDierheimer!
+- Migrated to Electron 44's promise-based `clipboard` API; the module is no longer available in renderer processes.
+- Added Playwright coverage for composer paste (text, HTML, images, and copied files) and clipboard writes; `window.eval` is enabled under the Playwright harness so `page.evaluate` works.
+- Upgraded `tar` to 7.5.19 to address CVE-2026-59873. (#2811) Thanks @anupamme!
+- Switched `app/package.json` from `resolutions` to `overrides`. (#2822) Thanks @LinusDierheimer!
+- Fixed the three type errors that were keeping CI red. (#2829) Thanks @brhellman!
+- `reportError()` now captures a real stack for stackless inputs. (#2828)
+- Errors thrown by community plugins are no longer reported to Sentry. (#2783)
+- Uncaught `shell.openExternal` rejections now capture the caller stack. (#2788)
+- `ContextifyScript` compile errors with no first-party frames are no longer reported to Sentry. (#2859)
+- On Linux, newer versions of sqlite3 are now built with clang-15.
+- Added a Claude Code hook that lints edited TypeScript files.
+
+## 1.23.0 (7/19/2026)
+
+Features:
+
+- Added Office 365 shared mailbox support. (#2763) Thanks @Kevin-Hamilton!
+- Added the ability to export folders to mbox files. (#2765) Thanks @Kevin-Hamilton!
+- Added an option to count unread messages across all accounts. (#2779) Thanks @WebDevBar!
+- Added a toggle for email render mode. (#2737) Thanks @AidanWarner97!
+- Added an MCP server (off by default) that lets local agents interact with mail.
+- On Linux, added a taskbar unread badge for KDE and other non-Unity desktops. (#2756) Thanks @WebDevBar!
+
+Bug Fixes:
+
+- Fixed a composer crash on quoted emails with inline images. (#2776)
+- Fixed a composer crash when grammar-check decorations apply mid-composition. (#2775)
+- Fixed missing Slate attributes on the IMAGE_TYPE fallback node. (#2774)
+- Fixed a composer cut crash and suppressed Sentry noise from third-party plugins. (#2755)
+- Fixed a crash when dragging threads to the sidebar after a thread is deleted. (#2760)
+- Fixed a crash in `EventRSVPTask` when attendee ICS data goes stale. (#2770)
+- Fixed a crash in the translation plugin when the iframe `contentDocument` is not yet loaded. (#2752)
+- Fixed an onboarding crash when back-navigation empties the page stack. (#2750)
+- Fixed `navigator.clipboard.writeText` in `@electron/remote` MenuItem handlers. (#2754)
+- Fixed an `ERR_FILE_NOT_FOUND` crash in Show Original when the RFC822 fetch fails. (#2772)
+- Fixed null crashes in `SendDraftTask`, thread-sharing, and send-and-archive. (#2757)
+- Fixed a null crash in three IPC handlers when `BrowserWindow.fromWebContents()` returns null. (#2758)
+- Fixed cancellation of `GetManyRFC2822Task` (folder export). (#118) Thanks @Kevin-Hamilton!
+- Fixed handling of XDG paths. (#2761) Thanks @LinusDierheimer!
+- On Linux, fixed an EPIPE crash loop in the uncaughtException handler. (#2769)
+- On Linux, fixed an EROFS/EIO/ENOSPC/EBADF crash loop in the uncaughtException handler that the EPIPE fix didn't cover. (#2789)
+- On Linux, send `org.freedesktop.DBus.Hello` before emitting the badge signal. (#2778) Thanks @WebDevBar!
+- Stopped startup after a fatal `config.json` load failure. (#2764)
+- Guarded `nativeTheme` remote object access in `SystemTrayIconStore`. (#2753)
+- Guarded grammar check so it no longer emits warnings when logged out.
+
+Improvements:
+
+- Reduced Sentry noise: expected IMAP/SMTP auth and connection failures are no longer reported. (#2762)
+- Reduced Sentry noise from OAuth SSL failures and improved the mailsync crash message. (#2771)
+- Downgraded the unknown-feature warning from an error report to a console warning. (#2759)
+- Wrapped unhandled fetch errors in `APIError` in `makeRequest`. (#2766)
+- Fixed an uncaught 'error' event crash in `MailsyncProcess.sync()`. (#2773)
+- Fixed an unhandled rejection in `IdentityStore` background polling. (#2768)
+- Added a macOS 27 icon variant.
+
+Developer:
+
+- Upgraded `@electron/packager` to prevent build hangs on newer Node.js versions. (#2767) Thanks @wrench-exile-legacy!
+- Get the desktop name dynamically from `package.json` and stop hardcoding `Mailspring.desktop`. (#2748, #2777) Thanks @LinusDierheimer!
+- Use a template var as the icon value in `Mailspring.desktop`. (#2747) Thanks @LinusDierheimer!
+- Added branding colors to `appdata.xml`. (#2751) Thanks @LinusDierheimer!
+- Fall back to ad-hoc signing in the copy-to-app build phase. (#117) Thanks @Kevin-Hamilton!
+
+## 1.22.0 (6/13/2026)
+
+Features:
+
+- Added the ability to choose which themes apply in automatic light/dark mode. (#2732) Thanks @Jayphen!
+
+Bug Fixes:
+
+- Fixed null crash when clicking "Send now" on undo-send toast after the message had already been sent. (#2738)
+- Fixed two null-access crashes reported in Sentry (MAILSPRING-CLIENT-1G, MAILSPRING-CLIENT-18, MAILSPRING-CLIENT-2V). (#2740)
+- Fixed two Sentry crashes: null account in preferences and null window in app menu IPC. (#2741)
+- Fixed crash when archiving from search with label-based archive categories. (#2743)
+- Fixed null crash when removing threads with unsynced trash/archive category. (#2736)
+- Fixed Outlook account setup. (#2735) Thanks @Suchiman!
+- Fixed Windows print crash caused by invalid file URL. (#2733)
+- Fixed TOCTOU null-reference crash in draft body setter (MAILSPRING-CLIENT-S). (#2728)
+- Fixed `DefaultClientHelperMac` passing boolean to error callback, causing false Sentry reports. (#2731)
+- Fixed `AttributeDateTime.fromJSON` treating 0/falsy values as missing. (#2730)
+- Fixed quickpreview CSP clobbering the default session's app-wide CSP. (#2744) Thanks @dansleboby!
+- Fixed `QuerySubscription._fetchRange` contiguity check using actual result length. (#2734)
+- On Windows, fixed EPERM crash when forking background query agent. (#2745)
+
+Improvements:
+
+- Improved Microsoft OAuth: better email resolution and suppressed no-mailbox errors from Sentry. (#2746)
+- Added diagnostics around "draft not found" error on send and cleaned up waiting queues. (#2727)
+- Moved payment flow out of modal to launch on the web for newer Stripe integration.
+- Richer exceptions when account has no from address or when label is provided to ChangeFolderTask.
+- Draft reminders now use `thread:` metadata prefix so sync engine promotes them to thread on send. (#2729)
+- Sync engine now forwards identity-level refresh events from delta stream. (mailsync#115)
+
+## 1.21.1 (5/19/2026)
+
+Bug Fixes:
+
+- Fixed dark mode visual issues with transitions and small CSS nits.
+- Fixed `activeMarks` access errors in the composer editor. (#2714)
+- Fixed thread list scroll indicator not sliding through time when dragging the scroll handle. (#2716)
+- Fixed `contains` error when parentFilter receives a non-Element node. (#2712)
+- Fixed secrets potentially appearing in the connection error detail modal. (#2717)
+- Fixed package name validation rejecting names with uppercase letters. (#2718)
+- Fixed sync engine crash during many-account sync by increasing SQLite busy timeout.
+- Fixed message importance headers not normalized for compatibility with some providers. (mailsync#113)
+
+Improvements:
+
+- Improved error logging for empty or malformed error objects. (#2713)
+- Optimized search regex compilation in category and label pickers. (#2715)
+- Improved sync engine performance by reducing unnecessary SQLite writes and moving parsing outside transactions.
+
+Developer:
+
+- Upgraded Electron from 41.5.0 to 41.6.1.
+- Upgraded React and React DOM to v17. (#2725)
+- Upgraded react-transition-group from 1.2 to 4.4.5.
+- Replaced deprecated `componentWillMount` with `componentDidMount`. (#2724)
+- Replaced legacy context API with React Context. (#2722, #2723)
+- Refactored class components to functional components with React.memo. (#2720)
+- Removed PropTypes, replaced with TypeScript types. (#2710)
+- Added missing TypeScript types to function declarations across many files.
+- Renamed remaining package spec directories to `specs`, converted JSX to TSX. (#2711)
+- Added Playwright tests for composer interactions.
+- Fixed lint CI step that was performing fixes instead of validation. (#2719)
+- Removed unused CircleCI configuration.
+- Set C++ standard to C++17 across all platforms. (mailsync#114)
+- Various CMake and build improvements for mailsync. (mailsync#108, mailsync#109, mailsync#110, mailsync#111, mailsync#112) Thanks @LinusDierheimer!
+
+## 1.21.0 (5/5/2026)
+
+Features:
+
+- Added Reply-To field to the composer header, allowing you to specify a different reply address when composing messages. (#2691) Thanks @Argjend12345!
+
+- Added bulk RFC2822 message export functionality to the sync engine. (#107)
+
+Bug Fixes:
+
+- Fixed HTTP/2 framing errors that could crash the sync engine during metadata streaming. (#103)
+
+- Prevented global keyboard shortcuts from firing when focus is in the composer. (#2693)
+
+- Strictly validate accent color hex values from system preferences to prevent errors. (#2692)
+
+Claude Security Audit:
+
+- Tightened validation to prevent file:// URIs in email content. (#2699)
+
+- Limited path traversal in protocol handler. (#2700)
+
+- Added allowlist validation for IPC window and webcontents methods. (#2701)
+
+- Improved HTML sanitization in the composer when pasting content. (#2702)
+
+- mailto links no longer support the ?attach= query parameter. (#2703)
+
+- Improved attachment name sanitization for security and compatibility. (#2705)
+
+- Improved email sanitization to block CSS @import tracking vectors. (#2706)
+
+- Added package name validation to prevent path traversal attacks. (#2698)
+
+- Added URL validation to the autoupdate handler. (#2697)
+
+- Show a notice about plugin trust when installing third-party plugins.
+
+Improvements:
+
+- When a detailed error log is available during OAuth sign-in, it is now displayed to help with troubleshooting.
+
+- Used `exec` in mailsync wrapper script for direct signal delivery. (#105)
+
+Developer:
+
+- Migrated build system from Grunt to a standalone Node.js script. (#2704)
+
+- Added option to skip installer creation in the build script. (#2707) Thanks @LinusDierheimer!
+
+- Dropped .map files from distribution packages. (#2686) Thanks @ReillyBrogan!
+
+- Replaced long-deprecated Raven with native Sentry envelope implementation and send sourcemaps during build. (#2694)
+
+- Upgraded TypeScript target from es2017 to es2024.
+
+- Refactored TypeScript compilation cache and only enable in dev mode. (#2695)
+
+- Removed macOS Touch Bar support. (#2696)
+
+- Updated ESLint and Prettier, and reference local versions in VS Code settings.
+
+- Added missing TypeScript types to function declarations across many files.
+
+- Upgraded Electron 41.2.1 to Electron 41.5.0.
+
+- Added Playwright tests for pre-release verification.
+
+- Added tests covering VCF/EML business logic and other utilities.
+
+## 1.20.1 (4/20/2026)
+
+Fixes:
+
+- Resolves an issue with the inline composer's key handling that could cause Gmail-style shortcuts to activate while you were typing into the subject line or recipients.
+
+## 1.20.0 (4/18/2026)
+
+Features:
+
+- Added an "Automatic" theme (the new default) that follows system light/dark mode.
+
+- Added system accent color support — the standard light and dark themes now use your OS accent color by default and this can be disabled from Preferences > Appearance. (#2682)
+
+- Improved the UX around creating folders and labels in the left sidebar - it's much easier to create nested items. (#2655)
+
+- A new "•••" menu on items in the left sidebar makes features (including the new EML export option) more discoverable.
+
+- Added EML export functionality for messages and folders. You can save selected messages as EML by right-clicking or from the app's menu, and export entire folders by right clicking in the left navigation. (#2652)
+
+Improvements:
+
+- Improved password storage error handling and reporting. (#2669)
+
+- Fixed a race condition causing Windows notification "Archive" and "Mark as Read" buttons to be unreliable.
+
+- Added Microsoft Office 365 / Outlook account setup guidance and troubleshooting documentation. (#2656)
+
+- Replaced text symbols with SVG icons in the toolbar. (#2658)
+
+- Refinements to EML export task in the sidebar.
+
+- Fixed the Wayland app_id after Electron 41 (Thanks @ReillyBrogan!)
+
+Bug Fixes:
+
+- Fixed an undefined `@font-weight-semi-bold` error in the ui-less-is-more theme. (#2684)
+
+- Fixed a crash in quick preview when the capture window is destroyed. (#2671)
+
+- Fixed an unhandled EPIPE error when writing to a dead mailsync process stdin. (#2673)
+
+- Fixed race conditions in draft expiration and changeset handling. (#2678)
+
+- Fixed broken IMAP UTF-7 encoding by replacing the broken `utf7` package with a custom implementation. (#2672)
+
+- Fixed printToPDF errors being incorrectly sent to Sentry. (#2677)
+
+- Fixed an issue where launch options and URLs were processed before app initialization was complete. (#2675)
+
+- Fixed a crash caused by null values in draft field change detection. (#2676)
+
+- Fixed an issue where metadata attachment could fail for newly sent messages. (#2664)
+
+- Fixed autoupdate error handling. (#2670)
+
+- Fixed error handling for ICS parsing in the EventHeader component. (#2668)
+
+- Fixed crash when navigating to 'All' with accounts that have no archive category. (#2666)
+
+- Fixed null reference crash in ContactDetail on update. (#2661)
+
+- Fixed MacOS notifications showing a second copy of the app's icon
+
+- Fixed null range crash in the email composer. (#2662)
+
+- Fixed a race condition in EmailFrame that could deliver a null `doc.body` to message extensions. (#2665)
+
+- Fixed OAuth code parsing to handle `+` characters correctly. (#2654)
+
+- Fixed the `core:pop-sheet` shortcut being blocked in the message list with an open reply composer. (#2653)
+
+- On Windows, fixed font-weight rendering by using CSS variables. (#2650)
+
+- On Linux, fixed xdg-mime 'not found' error not being caught on dash-based shells. (#2667)
+
+- Added error handling for `shell.openExternal` calls to prevent crashes on unsupported URLs. (#2679)
+
+Developer:
+
+- Fixed ability to declare platform-specific options via config-schema. (#2681)
+
+- Moved `appdata.xml` to the `metainfo` directory for proper Linux packaging. (#2659) Thanks @BlueManCZ!
+
+- Replaced direct `Electron dialog.showErrorBox` calls with `AppEnv.showErrorDialog`. (#2680)
+
+- Improved plugin activation error handling and TypeScript compilation. (#2674)
+
+- Suppressed LESS parse errors from Sentry reporting. (#2663)
+
+## 1.19.1 (4/6/2026)
+
+Bug Fixes:
+
+- On Windows, fixed notification click handling and removed a redundant window display call. (#2648)
+
+- Fixed the custom port input not updating in IMAP onboarding. (#2646)
+
+- Fixed VoiceOver handling on email composer token inputs (To, CC, BCC, etc.).
+
+Improvements:
+
+- Additional accessibility improvements: arrow key navigation and roving tabindex between messages in the message list, keyboard focus improvements in the account sidebar, email frame ARIA target for read-all support, and focus management fixes for modals and preferences.
+
+- On Linux, added Wayland session detection and a fallback menu button for window managers that don't support the system tray. (#2647)
+
+- Improved handling of navigation keys (arrow keys, etc.) in the composer typing state. (#2644) Thanks @ejbiker93ss!
+
+- Improved contact details panel styling.
+
+Developer:
+
+- Updated to Electron 41 (Chromium 146, Node.js 24.14), up from Electron 39 (Chromium 142, Node.js 22). (#2643)
+  - Chromium updated from 142 → 146, bringing security patches and modern web standard support
+  - Fixed white flash when opening app windows
+  - Reduced GPU memory usage on macOS
+  - On Windows: fixed a crash with UTF-8 file paths and a hang in native notification delivery
+  - On macOS: fixed menu items incorrectly staying disabled after being re-enabled
+  - On Windows: fixed window fullscreen state not being preserved correctly
+  - On Windows: system notifications now support action buttons and inline reply inputs
+  - On Linux/Wayland: frameless windows now display GTK drop shadows and support extended resize borders
+  - Fixed keyboard shortcut accelerators not working after toggling a menu item's enabled state
+  - Replaced the deprecated Electron clipboard renderer API with the standard `navigator.clipboard` API
+
+- Replaced legacy dependencies (`fs-plus`, `rimraf`, `mkdirp`, `uuid`, `temp`) with native Node.js APIs, removing several third-party dependencies.
+
+- Removed unused dependencies `deep-extend` and `graceful-fs`.
+
+- Added TypeScript typecheck and lint steps to the per-commit GitHub Actions workflow.
+
+- Updated license dates.
+
+## 1.19.0 (3/9/2026)
+
+Features:
+
+- Comprehensive accessibility improvements, including semantic landmarks, ARIA attributes, focus traps for modals, accessibility labels on buttons, and more. If you use Mailspring using a screenreader, we'd love feedback about this release. (#2638)
+
+- Added VCard import/export functionality to contacts. (#2626)
+
+- Added support for creating new calendar events via double-click on the calendar. (#2635)
+
+- Added Calendar menu and keyboard shortcuts. (#2634)
+
+Bug Fixes:
+
+- Fixed a TypeError when a contact's birthday date is undefined. (#2632)
+
+- Fixed Windows app restart and update handling with Squirrel. (#2631)
+
+- Fixed `canBeUndone` initialization in ChangeMailTask subclasses. (#2630)
+
+- Gracefully handle `xdg-mime` not being present on some Linux machines.
+
+- Fixed poor Sentry reporting of errors bridged over the `report-error` IPC channel.
+
+- Fixed an "Invalid String Length" error in the mailsync-process wrapper on very large stderr output.
+
+- Fixed a CardDAV issue with headers on XML requests and empty multiget responses.
+
+- Fixed `ERR_ABORTED` errors from quick previews being silently reported to Sentry.
+
+Improvements:
+
+- Improved calendar event editing with ICS-based recurrence support. (#2637)
+
+- Added recurring event indicator icon to calendar events. (#2633)
+
+- Added tray icon theme picker and 'none' style option for Linux. (#2628)
+
+- Tuned thread list swipe gesture detection, and added an option to disable swipe gestures. (#2629)
+
+- Folded grammar check preferences into General > Composer. (#2639)
+
+- Improved emoji popover positioning and updated emoji artwork with new additions.
+
+- Recovered the Slate editor when the user selects all and deletes all text, leaving only quoted text.
+
+- Added `WSAGetLastError()` logging for TCP connection failures on Windows (mailsync).
+
+Developer:
+
+- Added `X-GNOME-UsesNotifications=true` to the Linux `.desktop` file. (#2640) Thanks @LinusDierheimer!
+
+- Added `vcs-browser` to the Linux AppStream metadata. (#2641) Thanks @LinusDierheimer!
+
+- Removed deprecated Electron 4 polyfills and other outdated TODOs. (#2636)
+
+- Moved tests to `@testing-library/react`, run in GitHub Actions.
+
+- Added community plugins and themes documentation. (#2627)
+
+## 1.18.0 (2/22/2026)
+
+Features:
+
+- Grammar check is now available in the composer! (#2612)
+  - This feature relies on a deployment of LanguageTool at id.getmailspring.com - when you use Grammar Check, small snippets of your draft are sent to this server, but the requests are not logged and no message data is stored.
+  - This feature is disabled by default. To turn it on, click the new icon in the composer toolbar.
+
+- Mailspring now properly detects "Do Not Disturb" status on MacOS Sequoia and on Windows.
+
+Bug Fixes:
+
+- On Wayland, the `--background` flag now shows the main window briefly then hides it, which is the best we can do under Wayland's rules. (#2623)
+
+- On Wayland, fixed a keyboard freeze in the composer caused by a double `focus()` call. (#2622)
+
+- Fixed sound notifications playing on Windows regardless of the notification preference. (#2619)
+
+- Fixed the tray icon theme detection on GNOME/Unity Linux desktops. (#2610)
+
+- Fixed a crash in vCard parsing when the `VERSION` line is not found.
+
+- Fixed an issue with the first CardDAV sync incorrectly seeing existing ETags in mailsync.
+
+- Fixed IMAP IDLE to process `VANISHED` notifications sent by FastMail (and possibly other providers).
+
+- Fixed folder priority logic that was incorrectly applied to non-iCloud accounts in mailsync.
+
+Improvements:
+
+- Added support for the stnadard biographies / notes field on contacts. (#2621)
+
+- Rearranged the thread context menu to reduce accidental destructive actions. (#2620)
+
+- Added an empty state to the calendar when no CalDAV accounts are connected. (#2625)
+
+- The draft window now uses the message subject as the window title.
+
+- Improved read receipt tracking pixel reliability. (#2613)
+
+- Improved mail rules robustness and fixed condition evaluation bugs. (#2616)
+
+- Added VTIMEZONE to created calendar events so they are created on Yahoo in the correct timezone.
+
+- Enabled CalDAV discovery to support Fastmail, Yahoo, and other providers in the upcoming calendar.
+
+- On Windows, the app icon is now a rounded square to better fit with Windows 11 design guidelines.
+
+Developer:
+
+- Replaced CSS-based platform hiding with React conditionals in preferences. (#2614)
+
+- Removed subpixel-antialiased font smoothing overrides. (#2618)
+
+- Added `syncInit` to main-calendar to eliminate a 2.5s startup delay. (#2606)
+
+## 1.17.4 (2/11/2026)
+
+Features:
+
+- Added Agenda view to the calendar for chronological event browsing. (#2592)
+
+- Added Linux Do Not Disturb detection for notification suppression. (#2595)
+
+- Added Windows jump list and badge icon desktop integration. (#2594)
+
+- Added ARM64 (aarch64) Linux build support. (#2601)
+
+- The selected calendar view now persists across sessions. (#2600)
+
+Bug Fixes:
+
+- Fixed support for Wayland - window activation context is now handled gracefully. (#2599)
+
+- Fixed the app's system tray icon appearing as three dots (•••) at launch on Ubuntu 25.
+
+- Fixed summary notifications: broken Windows toast URLs and race condition. (#2597)
+
+- Improve Yandex account sync by ignoring their XLIST implementation, which is known to be buggy.
+
+- Fixed mutex re-entry locks during exception handling in mailsync that could be hit if a network disconnect caused both sync workers to throw at the same time.
+
+- Reverted IDLE error suppression that caused sync issues.
+
+Improvements:
+
+- On Linux, default to thin window framing with hamburger-style right menu. (#2604)
+
+- On Linux, added dark/light system tray icon support. (#2602)
+
+- Improved JS algorithm performance using Map/Set for better collection handling. (#2596)
+
+- Enabled support for custom config directory path. (#2587) Thanks @DerDemystifier!
+
+- Added missing release info in appdata. (#2586) Thanks @ychavoya!
+
+Developer:
+
+- Updated node-abi to 3.87.0 and added support for prebuilt better-sqlite3 binaries. (#2598)
+
+- Signed native .node addon files for Smart App Control compliance. (#2589)
+
+- Fixed RPM packaging dependencies for Fedora 43 and openSUSE compatibility. (#2590)
+
+- Fixed openSUSE CI test and RPM post-install scriptlet issues. (#2591)
+
+## 1.17.3 (1/31/2025)
+
+- Updates the .deb package dependencies to address Ubuntu 25 (libtidy58 replaces libtidy5deb1) and Linux Mint 22 (libcurl4t64, libgtk-3-0t64 instead of libgtk-3-0) installation issues.
+
+- Fix issues sending email on Windows caused by missing SASL libraries in some scenarios.
+
+- Screenshot mode now blurs the content of your emails as well (Thanks @cheack!)
+
+- The `Spanish - Latin America` (es_419) translations have been verified (Thanks @MiguVT!) and we've used the latest LLMs to update machine translations in other language files that were many years old.
+
+### Developer:
+
+- We added Ubuntu 25 and Linux Mint to the automated installation checks in Github Actions to ensure the .deb file installs correctly on these distributions.
+
+- The Mailsync post-build checks in Github Actions (on Mac, Windows, Linux) now authenticate against smtp.gmail.com in addition to establishing an SMTP SSL connection to verify that the SASL libraries are present in the distribution. (To prevent the Windows SMTP issue from ever happening again...)
+
+## 1.17.2 (1/24/2025)
+
+Features:
+
+- Calendar now includes a Day View for more detailed scheduling. (#2573)
+
+- Calendar events can now be edited and synced back to the server. Drag events to reschedule them, or double-click to edit details. (#2574)
+
+- Mailspring now supports one-click unsubscribe using email headers (RFC 2369/8058). When an email includes unsubscribe headers, a link appears to quickly unsubscribe. (#2576)
+
+Bug Fixes:
+
+- Fixed a race condition in category pickers (folder/label selectors) that caused the search input to lock up. (#2580)
+
+- Fixed composer input lag where Enter and Backspace keys sometimes required multiple presses. (#2578)
+
+- Fixed Office365 OAuth authentication issues caused by an origin header. (#2579)
+
+- Fixed RSVP calendar event handling bugs and improved RFC 5546/6047 compliance. (#2575)
+
+- Fixed missing mailsync dependencies in Linux packages.
+
+- Fixed disappearing emails on iCloud accounts by disabling QRESYNC.
+
+- Fixed network error handling during CardDAV/CalDAV discovery.
+
+- Fixed HTTP 406 errors during CardDAV/CalDAV discovery on Yahoo accounts.
+
+- Fixed in-reply-to header parsing on iCloud accounts where spam messages contain garbage values.
+
+- Fixed Yandex account sync error handling.
+
+Improvements:
+
+- Screenshot Mode now supports non-Latin characters. (#2577) Thanks @cheack!
+
+Developer:
+
+- Added GitHub Actions checks that verify Linux artifacts install and run correctly on Ubuntu, Fedora, and Arch Linux.
+
+- Removed unused Grunt tasks and cleaned up the eslint task. (#2569)
+
+- Windows mailsync dependencies moved to vcpkg for OpenSSL 3.6, latest libcurl, iconv, libtidy, libxml2, and sasl2.
+
+- Added openSUSE Tumbleweed to mailsync CI tests.
+
+## 1.17.1 (1/15/2025)
+
+Bug Fixes:
+
+- Keyboard navigation in Mailspring's thread list has been fixed!
+
+- On Fedora, the libtidy dependency is more broadly specified to support both soname versions (libtidy.so.5 or libtidy.so.58)
+
+We're aware of issues with Wayland support for some Linux users and are investigating how to handle these scenarios better, since Wayland became the default for Electron apps in September.
+
+## 1.17.0 (1/14/2025)
+
+This is Mailspring's biggest update in a while!
+
+The "infinite sync bug" that impacted iCloud accounts has been fixed, and we reviewed and applied many other patches to Mailcore and libetpan to improve mail sync.
+
+This release includes significant security updates - Mailspring now uses the system-bundled sasl2, ssl, crypto and curl libraries on all Linux platforms, and the UI has moved to the latest version of Electron. (On Linux, Electron 39 also brings native support for Wayland!)
+
+This release resolves issues with spellcheck on Windows, and also adds support for Windows toast notifications with inline actions.
+
+Bug Fixes:
+
+- On Windows, the Start Menu integration has been updated for Windows 11 and the "default mail client" option now links directly to Mailspring's page in Windows Settings.
+
+- On Windows, `mailto:` link handling no longer breaks due to a launch argument parsing issue.
+
+- On Windows, spellcheck now works correctly by using the DOM spellcheck attribute with typing debounce. (#2535)
+
+- On macOS, notifications now correctly respect Do Not Disturb settings. (#2525)
+
+- On macOS, Mailspring can now correctly create and delete the LaunchAgent file for launch on startup. (#2509)
+
+- On Linux, the tray icon no longer shares an ID with other Electron apps. (#2529)
+
+- On Linux, native Wayland support is now enabled in the Snap package. (#2527)
+
+- The "Message Clipped - Show All" window no longer has encoding issues. (#2526)
+
+- "Download All Attachments" no longer incorrectly renames files with hyphen-number patterns. (#2531)
+
+- Additional safeguards have been added to attachment preview generation. (#2523)
+
+Localization:
+
+- Hungarian is now a manually verified language!
+
+- Brazilian Portuguese (pt-BR) translation has been updated. (#2504, #2506)
+
+Developer:
+
+- Mailspring now uses Electron 39, Chromium 140, and Node.js 22 for improved performance and security.
+
+- Mac, Windows, and Linux builds are now managed entirely with Github Actions, and new Github Actions for mailsync verify that the Linux binary is portable and runs on Ubuntu, Fedora, and Arch Linux.
+
+- TypeScript has been upgraded from version 3 to version 5. (#2547)
+
+- React has been upgraded from 16.6.0 to 16.9.0. (#2545)
+
+- Windows builds now use GitHub Actions instead of AppVeyor. (#2524)
+
+- Many dependencies have been upgraded to address npm audit issues, including better-sqlite, uuid, ical.js, juice, lru-cache, snarkdown, and node-emoji.
+
+Sync Improvements:
+
+- Fixed multiple memory leaks, race conditions, and potential deadlocks following an in-depth automated code review.
+
+- Fixed CardDAV to avoid re-discovering address books on every sync.
+
+- Fixed SMTP EHLO/HELO with IPv6 addresses on Linux.
+
+- Fixed handling of empty IMAP parts from Outlook.com servers.
+
+- SQLite has been upgraded to the latest version.
+
+- Fixed Windows build compatibility with strptime and timegm functions.
+
+Calendar Preview:
+
+- The Calendar preview now includes a full month view with day, week, and month navigation.
+
+- You can now search for events in the calendar.
+
+- Dragging calendar events will soon update their time, making it easier to reschedule items.
+
+- CalDAV sync now supports calendar colors, recurring events with exceptions, and smart rate limiting for 429 responses.
+
+- CalDAV now uses ctags to skip unnecessary syncs when calendars haven't changed.
+
+- Fixed CalDAV crashes on Gmail accounts when parsing privilege-set.
+
+## 1.16.0
+
+- Thunderbird-style Autoconfiguration (#2493)
+
+- Fix in-app previews for PDF attachments on Windows / Linux
+
+- Update and improve zh-TW Traditional Chinese locale (#2498)
+
+- Update Czech translation (#2500)
+
+- snap: Use core24 as base (#2497)
+
+- Change lsb-core-noarch to be an optional dependency in the RPM package. (#2503)
+
+- Fix a few misc application errors logged to our reporting service
+
+- Upgrade to Electron 37.2.2 - Chromium 138, V8 13.8, and Node.js 22.16 for faster JavaScript execution and better email rendering.
+
+## 1.15.1
+
+This is a patch release that resolves several user-reported issues. Thank
+
+- On Windows, notifications could not appear because of an issue checking Windows "Quiet Hours" settings
+
+- Dragging and dropping file attachments to the composer or the signature editor resulted in a path error.
+
+- On Windows, you may need to install Language Packs for some languages to be available for spellcheck, and this no longer causes an error.
+
+- The RPM build no longer generate build_id links to prevent conflicts when installing multiple Electron apps.
+
+## 1.15.0
+
+Happy 2025! This version of Mailspring upgraedes the app to Electron 33 and Chromium 130, ensuring the latest upstream bug fixes, security patches and improvements are available in the app.
+
+- macOS 10.15 (Catalina) is no longer supported. macOS 11 (Big Sur) or later is required.
+
+- We are considering dropping Ubuntu 16, Ubuntu 18 and other Linux releases >6 years old. If this would impact you, please let me know at ben@foundry376.com! It's getting harder to build a mailsync binary because our CI services are dropping support.
+
+Fixes:
+
+- Mailspring now conforms to the AppStream metainfo standard. Thanks @mischkl!
+
+## 1.14.0
+
+This version of Mailspring includes several improvements:
+
+- Mailspring now connects to Outlook accounts using OAuth.
+
+- The `autoconfig` database used to identify your IMAP and SMTP settings automatically has been upgraded to reflect changes in provider settings.
+
+- On Windows and Linux, previewing attachments is more robust and works with a wider variety of files. These attachments also have rendered previews in the message view.
+
+- Mailspring allows you to add Medium, GitHub and YouTube links to email signatures created in the app. (#2484) Thanks @sudeephazra!
+
+- Subject lines no longer overflow if they contain single long words (#2485) Thanks @probablykasper!
+
+Developer:
+
+- Mailspring now uses Electron 30, a recent supported release based on Chromium M124 - thanks to @Phylu for lots of PRs and manual testing that helped us move up three years of versions (v17 => v30) in the last 12 months!
+
+- The Changelog now mentions security contributions by Positive Technologies, Payatu, and Sonar in v1.13.3.
+
+## 1.13.3
+
+Happy new year! This is a small update to Mailspring with a few important changes:
+
+- On macOS, long-pressing a key to show it's available subtitutions (eg: `e` to see `é, ê, etc.`) now works properly in the email composer. Sorry for the delay fixing this issue, for many non-english speakers on macOS we know it's a core part of your email workflow.
+
+- We now escape subject and participant names in the print modal, ensuring that they render properly for printing. Thanks to Andrialdy R for identifying and documenting a related vulnerability.
+
+- We now use DOMPurify to sanitize the content of HTML emails for display. DOMPurify is maintained by a team of security-oriented web engineers and will ensure Mailspring protects you from the widest possible range of XSS attacks and exploits. Thanks to Yaniv Nizry of [Sonar](https://sonarsource.com) for identifying and reporting weaknesses in our old sanitizer.
+
+- As part of the DOMPurify change, Mailspring now supports a smaller range of links in emails (https://, tel://, mailto:// etc). Thanks to Vaibhav Rajput and Prajyot Chemburkar of [Payatu](https://payatu.com/) for reporting that smb:// links were previously allowed and useful in triggering exploits.
+
+## 1.13.2
+
+This is a patch release that fixes several issues:
+
+- Composition events in Mailspring's composer should work as expected. (Typing modifier keys, such as Option-E followed by E to create É)
+
+- The composer warn about several more invalid recipient errors correctly (thanks @Phylu!)
+
+- Dark-mode tray support on Windows has been improved with new icons (thanks @Phylu!)
+
+- The Linux Snap build no longer requests extraneous permissions (thanks @3v1n0!)
+
+## 1.13.1
+
+Mailspring 1.13 now runs on Electron 22, completing a migration process we started in 1.12.0!
+
+If you are upgrading from an old version of Mailspring, download and run 1.12.0 first before installing this version. We've moved from keytar to Electron's safeStorage API for securely storing your email passwords, and version 1.12.0 will perform a migration ensuring your passwords are transitioned.
+
+If you're using the snap version of Mailspring, you may find that Mailspring forgets your passwords when you upgrade. I'm very sorry for the hassle this causes - issues with snap containment in version 1.12.0 caused Mailspring to lose many user's passwords during the upgrade process. If this applies to you, you may see password errors and need to:
+
+    Visit Preferences > Subscription and click Setup Mailspring ID and sign back in to your Mailspring
+    account. (You should see an alert at launch that will remind you which email address you'd used
+    for your Mailspring ID)
+
+    Visit Preferences > Accounts and re-authenticate any accounts shown in red that are having
+    connection difficulty.
+
+## 1.12.0 (10/09/2023)
+
+Features:
+
+- The Windows tray icon styles have been improved, and a new option allows you to opt-out of the red icon style. (Thanks @Phylu)
+
+- Mail rules now support filtering based on the "Reply-to" header. (Thanks @Phylu)
+
+- The "Snooze" UI now allows you to type "600" as a shortcut for for "6:00". (Thanks @ChocoTonic)
+
+Bug Fixes:
+
+- The snooze label is less ambiguous and includes the month and year. (Thanks @Phylu)
+
+Localization:
+
+- British english localizations have been added. (Thanks @danbishop)
+
+- Traditional chinese localizations have been greatly improved. (Thanks @PeterDaveHello)
+
+Developer:
+
+- Mailspring now stores your mail secrets using Electron SafeStorage instead of the deprecated Keytar library thanks to updates by @Phylu. This will allow us to move to a newer version of Electron soon!
+
+- The Snap package now uses core22 and the `gnome` extension. (Thanks @soumyaDghosh)
+
 ## 1.11.0 (07/28/2023)
 
 Features:
@@ -26,7 +1028,7 @@ Bug Fixes:
 
 Developer:
 
-- Mailspring now uses a more restrictive Content-Security-Policy that includes `object-src none; media-src mailspring:; manifest-src none;`. If your plugin packaged media such as sounds, you may need to reference them via the mailspring:// URL syntax (ala 2b75347c)
+- Mailspring now uses a more restrictive Content-Security-Policy that includes `object-src none; media-src mailspring:; manifest-src none;`. If your plugin packaged media such as sounds, you may need to reference them via the mailspring:// URL syntax (ala 2b75347c) (Thanks to Igor Sak-Sakovskiy of [Positive Technologies](https://www.ptsecurity.com/ww-en/) for a related vulnerability report.)
 
 ## 1.10.8 (12/29/2022)
 
@@ -64,7 +1066,7 @@ Changes:
 
 - Mailsync now requests fewer emails at a time, fixing compatibility issues with large Office365 accounts. (Thanks @BrandonGillis for extensive testing of this change!)
 
-- Inline image "cid:" references may appear only in `<img src=“”>`, and may not appear elsewhere in message bodies.
+- Inline image "cid:" references may appear only in `<img src=“”>`, and may not appear elsewhere in message bodies. (Thanks to Igor Sak-Sakovskiy of [Positive Technologies](https://www.ptsecurity.com/ww-en/) for this vulnerability report.)
 
 - Mailspring uses iframe sandboxing to disallow interactivity in message bodies, in addition to santizing loaded HTML down to a strict list of tags and attributes.
 
@@ -779,7 +1781,6 @@ Fixes:
 Features:
 
 - Mailspring now supports localization! The app detects your system locale and all text, menus, buttons, etc. in the app appear in your language. Mailspring's core strings has been manually localized in 38 languages and the rest (mostly error messages and text describing features) have been automatically translated.
-
   - We'd love your help improving these localizations! A new "Developer > Toggle Localizer Tools" menu option in Mailspring allows you to submit better translations right within the app. You can also edit the translation files directly and submit a pull request. See the new [localizer guide here](https://github.com/Foundry376/Mailspring/blob/master/LOCALIZATION.md).
 
   - If you use a RTL language, Mailspring's entire UI now appears right-justified, including the sidebar, preference panels, scrollbars, and more. If you use Mailspring in Arabic or Hebrew and notice issues in the right-to-left presentation, please file issues or submit pull requests.
@@ -864,7 +1865,6 @@ Fixes:
 ### 1.3.0 (7/14/2018)
 
 - Mailspring 1.3 brings an overhauled search bar with powerful autocomplete that makes it easier to create advanced search queries.
-
   - In addition to searching for freeform text and using the Gmail query language (`subject:`, `in:`, `is:`, `from:`, `to:`), Mailspring now allows you to search by date using natural language terms like `since: "last week"` and `before: "february 5th"`. Try combining them with other terms to search a specific time window!
 
   - You can now right-click a thread to search for other threads from that sender or with that subject.
@@ -872,7 +1872,6 @@ Fixes:
   - You can now focus the search bar and conduct searches entirely with keyboard shortcuts (use Escape to exit the search bar!) #960
 
 - Mailspring now uses Electron 2.0.2, which delivers some [great bug fixes and new features](https://github.com/electron/electron/releases/tag/v2.0.0):
-
   - Chrome 61, Node 8.9.3, V8 6.1.534.41 with improved performance and lower memory footprints
   - Better GTK+ theme support, including support for menu styling
   - Better support for Linux desktop notifications
@@ -1192,7 +2191,6 @@ Fixes:
 - The `View` links in the contact sidebar now open the browser correctly.
 
 - Electron has been bumped to 1.7.10, which fixes:
-
   - Subpixel font rendering with freetype on Linux.
 
   - Rendering issues with Nvidia GPU on High Sierra

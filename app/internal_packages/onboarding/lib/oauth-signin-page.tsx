@@ -1,28 +1,72 @@
-import { shell, clipboard } from 'electron';
+import { shell } from 'electron';
 import React from 'react';
-import { localized, localizedReactFragment, PropTypes, Account } from 'mailspring-exports';
-import { RetinaImg } from 'mailspring-component-kit';
+import { localized, localizedReactFragment, Account } from 'mailspring-exports';
+import { CopyButton, RetinaImg } from 'mailspring-component-kit';
+import crypto from 'crypto';
 import http from 'http';
 import url from 'url';
 
 import FormErrorMessage from './form-error-message';
-import { LOCAL_SERVER_PORT } from './onboarding-constants';
+import { LOCAL_SERVER_PORT, getLatestOAuthState } from './onboarding-constants';
 import AccountProviders from './account-providers';
+
+/**
+ * Read a parameter from a redirect URL's query string, ignoring the path so the
+ * same listener serves Google (root) and Microsoft (`/desktop`) redirects.
+ * Uses decodeURIComponent instead of querystring.parse to preserve `+` as
+ * a literal character (RFC 3986) rather than decoding it as a space
+ * (application/x-www-form-urlencoded).
+ */
+function extractQueryParam(requestUrl: string, param: string): string | null {
+  const rawQuery = url.parse(requestUrl).query || '';
+  const match = rawQuery.match(new RegExp(`(?:^|&)${param}=([^&]*)`));
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+}
+
+export function extractOAuthCodeFromUrl(requestUrl: string): string | null {
+  return extractQueryParam(requestUrl, 'code');
+}
+
+export function extractOAuthStateFromUrl(requestUrl: string): string | null {
+  return extractQueryParam(requestUrl, 'state');
+}
+
+/**
+ * The `state` value is carried alongside PKCE as defense in depth (RFC 6749 §10.12).
+ * A callback whose state is absent or does not match the value on the most recently
+ * built authorization URL aborts the sign-in rather than exchanging the code.
+ */
+export function oauthStateIsValid(
+  received: string | null,
+  expected: string | null = getLatestOAuthState()
+): boolean {
+  if (!received || !expected) return false;
+  const receivedBuffer = Buffer.from(received, 'utf8');
+  const expectedBuffer = Buffer.from(expected, 'utf8');
+  if (receivedBuffer.length !== expectedBuffer.length) return false;
+  return crypto.timingSafeEqual(receivedBuffer, expectedBuffer);
+}
 
 interface OAuthSignInPageProps {
   providerAuthPageUrl: string;
   buildAccountFromAuthResponse: (rep: any) => Account | Promise<Account>;
   onSuccess: (account: Account) => void;
   onTryAgain: () => void;
-  providerConfig: typeof AccountProviders[0];
+  providerConfig: (typeof AccountProviders)[0];
   serviceName: string;
+  children?: React.ReactNode;
 }
 
 interface OAuthSignInPageState {
   authStage: string;
   showAlternative: boolean;
   errorMessage?: string;
-  pressed?: boolean;
+  errorLog?: string;
 }
 
 export default class OAuthSignInPage extends React.Component<
@@ -30,20 +74,6 @@ export default class OAuthSignInPage extends React.Component<
   OAuthSignInPageState
 > {
   static displayName = 'OAuthSignInPage';
-
-  static propTypes = {
-    /**
-     * Step 1: Open a webpage in the user's browser letting them login on
-     * the native provider's website. We pass along a key and a redirect
-     * url to a Mailspring-owned server
-     */
-    providerAuthPageUrl: PropTypes.string,
-    buildAccountFromAuthResponse: PropTypes.func,
-    onSuccess: PropTypes.func,
-    onTryAgain: PropTypes.func,
-    iconName: PropTypes.string,
-    serviceName: PropTypes.string,
-  };
 
   _server?: http.Server;
   _startTimer: NodeJS.Timeout;
@@ -71,16 +101,22 @@ export default class OAuthSignInPage extends React.Component<
     // launch a web server
     this._server = http.createServer((request, response) => {
       if (!this._mounted) return;
-      const { query } = url.parse(request.url, true);
-      if (query.code) {
-        this._onReceivedCode(query.code);
-        response.writeHead(302, { Location: 'https://id.getmailspring.com/oauth/finished' });
-        response.end();
-      } else {
+      const code = extractOAuthCodeFromUrl(request.url);
+      if (!code) {
         response.end('Unknown Request');
+        return;
       }
+      if (!oauthStateIsValid(extractOAuthStateFromUrl(request.url))) {
+        this._onStateMismatch();
+        response.writeHead(400);
+        response.end('Invalid State');
+        return;
+      }
+      this._onReceivedCode(code);
+      response.writeHead(302, { Location: 'https://id.getmailspring.com/oauth/finished' });
+      response.end();
     });
-    this._server.once('error', err => {
+    this._server.once('error', (err) => {
       AppEnv.showErrorDialog({
         title: localized('Unable to Start Local Server'),
         message: localized(
@@ -100,8 +136,35 @@ export default class OAuthSignInPage extends React.Component<
   }
 
   _onError(err) {
-    this.setState({ authStage: 'error', errorMessage: err.message });
-    AppEnv.reportError(err);
+    const isNetworkError = err.message?.includes('Failed to fetch') || err.isNetworkError;
+    this.setState({
+      authStage: 'error',
+      errorMessage: isNetworkError
+        ? localized(
+            'A network error occurred. Please check your internet connection and try again.'
+          )
+        : err.message,
+      errorLog: err.rawLog,
+    });
+    // Don't report network errors or user-configuration errors (e.g. account has no mailbox)
+    // to Sentry — they are expected and shown directly to the user.
+    if (!isNetworkError && !err.isUserError) {
+      AppEnv.reportError(err);
+    }
+  }
+
+  _onStateMismatch() {
+    AppEnv.focus();
+    // A callback for an authorization URL built before the current one (e.g. a sign-in
+    // tab left open from an earlier visit to this page) lands here, so this is shown
+    // to the user rather than reported to Sentry.
+    const err: any = new Error(
+      localized(
+        'The sign-in response did not match this sign-in attempt. Please go back and try again.'
+      )
+    );
+    err.isUserError = true;
+    this._onError(err);
   }
 
   async _onReceivedCode(code) {
@@ -150,11 +213,13 @@ export default class OAuthSignInPage extends React.Component<
     }
 
     // Error
+    const { note } = this.props.providerConfig;
     return (
       <div>
         <h2>{localized('Sorry, we had trouble logging you in')}</h2>
         <div className="error-region">
-          <FormErrorMessage message={this.state.errorMessage} />
+          <FormErrorMessage message={this.state.errorMessage} log={this.state.errorLog} />
+          {note && <div className="message empty note">{note}</div>}
           <div className="btn" style={{ marginTop: 20 }} onClick={this.props.onTryAgain}>
             {localized('Try Again')}
           </div>
@@ -181,17 +246,17 @@ export default class OAuthSignInPage extends React.Component<
             value={this.props.providerAuthPageUrl}
             readOnly
           />
-          <div
-            className="copy-to-clipboard"
-            onClick={() => clipboard.writeText(this.props.providerAuthPageUrl)}
-            onMouseDown={() => this.setState({ pressed: true })}
-            onMouseUp={() => this.setState({ pressed: false })}
-          >
-            <RetinaImg name="icon-copytoclipboard.png" mode={RetinaImg.Mode.ContentIsMask} />
-          </div>
+          <CopyButton className="copy-to-clipboard" text={this.props.providerAuthPageUrl} />
         </div>
       </div>
     );
+  }
+
+  _renderNote() {
+    if (this.state.authStage === 'error') return null;
+    const { note } = this.props.providerConfig;
+    if (!note) return null;
+    return <div className="message empty note">{note}</div>;
   }
 
   render() {
@@ -206,6 +271,8 @@ export default class OAuthSignInPage extends React.Component<
           />
         </div>
         {this._renderHeader()}
+        {this._renderNote()}
+        {this.state.authStage === 'initial' && this.props.children}
         {this._renderAlternative()}
       </div>
     );

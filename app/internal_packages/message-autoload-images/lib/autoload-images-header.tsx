@@ -1,5 +1,5 @@
 import React from 'react';
-import { localized, PropTypes, Message } from 'mailspring-exports';
+import { localized, Message } from 'mailspring-exports';
 
 import AutoloadImagesStore from './autoload-images-store';
 import * as Actions from './autoload-images-actions';
@@ -9,10 +9,6 @@ export default class AutoloadImagesHeader extends React.Component<
   { blocking: boolean }
 > {
   static displayName = 'AutoloadImagesHeader';
-
-  static propTypes = {
-    message: PropTypes.instanceOf(Message).isRequired,
-  };
 
   _unlisten?: () => void;
 
@@ -32,10 +28,12 @@ export default class AutoloadImagesHeader extends React.Component<
     });
   }
 
-  componentWillReceiveProps(nextProps) {
-    const blocking = AutoloadImagesStore.shouldBlockImagesIn(nextProps.message);
-    if (blocking !== this.state.blocking) {
-      this.setState({ blocking });
+  componentDidUpdate(prevProps: { message: Message }) {
+    if (prevProps.message !== this.props.message) {
+      const blocking = AutoloadImagesStore.shouldBlockImagesIn(this.props.message);
+      if (blocking !== this.state.blocking) {
+        this.setState({ blocking });
+      }
     }
   }
 

@@ -29,13 +29,19 @@ class ComposerWithWindowProps extends React.Component<
 
     // We'll now always have windowProps by the time we construct this.
     const windowProps = AppEnv.getWindowProps();
-    const { draftJSON, headerMessageId } = windowProps;
+    const { draftJSON, headerMessageId, newDraft } = windowProps;
     if (!draftJSON) {
       throw new Error('Initialize popout composer windows with valid draftJSON');
     }
     const draft = new Message({}).fromJSON(draftJSON);
     DraftStore._createSession(headerMessageId, draft);
     this.state = windowProps;
+
+    // Set the OS window title immediately based on the draft subject (if any)
+    const subject = draft.subject && draft.subject.trim();
+    AppEnv.getCurrentWindow().setTitle(
+      subject || (newDraft ? localized('New Message') : localized('Message'))
+    );
   }
 
   componentWillUnmount() {
@@ -50,6 +56,19 @@ class ComposerWithWindowProps extends React.Component<
 
   _onDraftReady = async () => {
     await this._composerComponent.focus();
+
+    // Subscribe to draft changes to keep the OS window title up to date as the user types
+    const { newDraft } = AppEnv.getWindowProps();
+    const session = await DraftStore.sessionForClientId(this.state.headerMessageId);
+    this._usub = session.listen(() => {
+      const d = session.draft();
+      if (!d) return;
+      const subject = d.subject && d.subject.trim();
+      AppEnv.getCurrentWindow().setTitle(
+        subject || (newDraft ? localized('New Message') : localized('Message'))
+      );
+    });
+
     AppEnv.displayWindow();
 
     if (this.state.errorMessage) {
@@ -60,7 +79,7 @@ class ComposerWithWindowProps extends React.Component<
   render() {
     return (
       <ComposerViewForDraftClientId
-        ref={cm => {
+        ref={(cm) => {
           this._composerComponent = cm;
         }}
         onDraftReady={this._onDraftReady}
@@ -70,7 +89,7 @@ class ComposerWithWindowProps extends React.Component<
     );
   }
 
-  _showInitialErrorDialog(msg, detail) {
+  _showInitialErrorDialog(msg: string, detail: string) {
     // We delay so the view has time to update the restored draft. If we
     // don't delay the modal may come up in a state where the draft looks
     // like it hasn't been restored or has been lost.

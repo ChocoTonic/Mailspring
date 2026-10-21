@@ -1,5 +1,7 @@
-import React, { CSSProperties } from 'react';
-import { Contact, localized, CanvasUtils, AccountStore } from 'mailspring-exports';
+import React, { useRef } from 'react';
+import ReactDOM from 'react-dom';
+import { webUtils } from 'electron';
+import { Contact, localized, CanvasUtils, AccountStore, Utils } from 'mailspring-exports';
 import {
   FocusContainer,
   MultiselectList,
@@ -9,29 +11,27 @@ import {
   ListDataSource,
 } from 'mailspring-component-kit';
 import { ContactsPerspective, Store } from './Store';
-import _ from 'underscore';
+import { writeContactsToTempVCF, importContactsFromPaths } from './VCFImportExport';
+import { ContactListContextMenu } from './ContactListContextMenu';
+import { displayNameForContact, initialsForContact } from './ContactDisplayName';
 
 const ContactColumn = new ListTabular.Column({
   name: 'Item',
   flex: 1,
   resolver: (contact: Contact) => {
-    // until we revisit the UI to accommodate more icons
     const account = AccountStore.accountForId(contact.accountId);
-    let style: CSSProperties = {}
-    if (account && account.color) {
-      style = {
-        height: '50%',
-        paddingLeft: '4px',
-        borderLeftWidth: '4px',
-        borderLeftColor: account.color,
-        borderLeftStyle: 'solid',
-      }
-    }
+    const hue = Utils.hueForString(contact.email);
     return (
-      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-        <div style={style} className="subject" dir="auto">
-          {contact.name}
+      <div className="contact-list-row">
+        <div className="contact-list-avatar" style={{ backgroundColor: `hsl(${hue}, 50%, 45%)` }}>
+          {initialsForContact(contact)}
         </div>
+        <div className="contact-list-name" dir="auto">
+          {displayNameForContact(contact)}
+        </div>
+        {account && account.color && (
+          <div className="contact-list-account-color" style={{ backgroundColor: account.color }} />
+        )}
       </div>
     );
   },
@@ -39,7 +39,13 @@ const ContactColumn = new ListTabular.Column({
 
 class ContactsListEmpty extends React.Component<{ visible: boolean }> {
   render() {
-    return this.props.visible ? <div>No contacts to display</div> : <span />;
+    return this.props.visible ? (
+      <div className="contacts-empty-state">
+        <div className="message">{localized('No contacts to display')}</div>
+      </div>
+    ) : (
+      <span />
+    );
   }
 }
 
@@ -49,40 +55,148 @@ interface ContactListProps {
   perspective: ContactsPerspective;
 }
 
-class ContactListWithData extends React.Component<ContactListProps> {
-  _searchEl = React.createRef<HTMLInputElement>();
+interface ContactListState {
+  draggingFiles: boolean;
+}
 
-  _onDragItems = (event, items) => {
+class ContactListWithData extends React.Component<ContactListProps, ContactListState> {
+  _dragCounter = 0;
+
+  refs: {
+    list: MultiselectList;
+  };
+
+  constructor(props: ContactListProps) {
+    super(props);
+    this.state = { draggingFiles: false };
+  }
+
+  componentDidMount() {
+    ReactDOM.findDOMNode(this).addEventListener('contextmenu', this._onShowContextMenu);
+  }
+
+  componentWillUnmount() {
+    ReactDOM.findDOMNode(this).removeEventListener('contextmenu', this._onShowContextMenu);
+  }
+
+  _onShowContextMenu = (event: MouseEvent) => {
+    if (!this.refs.list) return;
+    const contacts = this.refs.list.itemsForMouseEvent(event) as Contact[];
+    if (!contacts || contacts.length === 0) return;
+    new ContactListContextMenu(contacts).displayMenu();
+  };
+
+  _onDragItems = (event: React.DragEvent, items: Contact[]) => {
     const data = {
-      ids: items.map(c => c.id),
-      accountIds: _.uniq(items.map(t => t.accountId)),
+      ids: items.map((c) => c.id),
+      accountIds: [...new Set(items.map((t) => t.accountId))],
     };
     event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.dragEffect = 'move';
+    event.dataTransfer.dropEffect = 'move';
 
     const canvas = CanvasUtils.canvasForDragging('contacts', data.ids.length);
     event.dataTransfer.setDragImage(canvas, 10, 10);
     event.dataTransfer.setData('mailspring-contacts-data', JSON.stringify(data));
     event.dataTransfer.setData(`mailspring-accounts=${data.accountIds.join(',')}`, '1');
+
+    // Allow the contacts to be dragged to the desktop as a .vcf file.
+    try {
+      const filePath = writeContactsToTempVCF(items as Contact[]);
+      const filename = require('path').basename(filePath);
+      // The DownloadURL second segment MUST match the last path component of the URL.
+      event.dataTransfer.setData('DownloadURL', `text/vcard:${filename}:file://${filePath}`);
+    } catch (err) {
+      console.warn('Could not write temp VCF for drag export:', err);
+    }
+  };
+
+  // --- VCF file drop-into-list handling ---
+
+  _isFileDrag(e: React.DragEvent) {
+    return e.dataTransfer.types.includes('Files');
+  }
+
+  _onFileDragEnter = (e: React.DragEvent) => {
+    if (!this._isFileDrag(e)) return;
+    this._dragCounter++;
+    if (this._dragCounter === 1) this.setState({ draggingFiles: true });
+  };
+
+  _onFileDragLeave = (e: React.DragEvent) => {
+    if (!this._isFileDrag(e)) return;
+    this._dragCounter--;
+    if (this._dragCounter === 0) this.setState({ draggingFiles: false });
+  };
+
+  _onFileDragOver = (e: React.DragEvent) => {
+    if (!this._isFileDrag(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  _onFileDrop = (e: React.DragEvent) => {
+    if (!this._isFileDrag(e)) return;
+    e.preventDefault();
+    this._dragCounter = 0;
+    this.setState({ draggingFiles: false });
+
+    const vcfFiles = Array.from(e.dataTransfer.files).filter((f) => {
+      const lower = f.name.toLowerCase();
+      return lower.endsWith('.vcf') || lower.endsWith('.vcard');
+    });
+    if (vcfFiles.length === 0) return;
+
+    const { perspective } = this.props;
+    if (!('accountId' in perspective)) {
+      require('@electron/remote').dialog.showMessageBox({
+        type: 'info',
+        title: localized('Select an Account'),
+        message: localized(
+          'Please select a specific account from the sidebar before importing contacts.'
+        ),
+        buttons: [localized('OK')],
+      });
+      return;
+    }
+
+    importContactsFromPaths(
+      vcfFiles.map((f) => webUtils.getPathForFile(f)),
+      perspective.accountId
+    );
   };
 
   render() {
+    const { draggingFiles } = this.state;
     return (
-      <FocusContainer collection="contact">
-        <MultiselectList
-          ref="list"
-          draggable
-          key={JSON.stringify(this.props.perspective)}
-          className="contact-list"
-          columns={[ContactColumn]}
-          dataSource={this.props.listSource}
-          itemPropsProvider={() => ({})}
-          itemHeight={32}
-          EmptyComponent={ContactsListEmpty}
-          onDragItems={this._onDragItems}
-          onDragEnd={() => null}
-        />
-      </FocusContainer>
+      <div
+        className={`contact-list-drop-target${draggingFiles ? ' dragging-files' : ''}`}
+        style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}
+        onDragEnter={this._onFileDragEnter}
+        onDragLeave={this._onFileDragLeave}
+        onDragOver={this._onFileDragOver}
+        onDrop={this._onFileDrop}
+      >
+        {draggingFiles && (
+          <div className="vcf-drop-overlay">
+            <div className="vcf-drop-overlay-label">{localized('Drop to Import VCards')}</div>
+          </div>
+        )}
+        <FocusContainer collection="contact">
+          <MultiselectList
+            ref="list"
+            draggable
+            key={JSON.stringify(this.props.perspective)}
+            className="contact-list"
+            columns={[ContactColumn]}
+            dataSource={this.props.listSource}
+            itemPropsProvider={() => ({})}
+            itemHeight={44}
+            EmptyComponent={ContactsListEmpty}
+            onDragItems={this._onDragItems}
+            onDragEnd={() => null}
+          />
+        </FocusContainer>
+      </div>
     );
   }
 }
@@ -108,21 +222,23 @@ interface ContactListSearchWithDataProps {
 }
 
 const ContactListSearchWithData = (props: ContactListSearchWithDataProps) => {
+  const searchEl = useRef<HTMLInputElement>(null);
   return (
     <div className="contact-search">
       <RetinaImg
         className="search-accessory search"
         name="searchloupe.png"
         mode={RetinaImg.Mode.ContentDark}
-        onClick={() => this._searchEl.current.focus()}
+        onClick={() => searchEl.current?.focus()}
       />
       <input
         type="text"
-        ref={this._searchEl}
+        ref={searchEl}
         value={props.search}
-        placeholder={`${localized('Search')} ${props.perspective.type === 'unified' ? 'All Contacts' : props.perspective.label
-          }`}
-        onChange={e => props.setSearch(e.currentTarget.value)}
+        placeholder={`${localized('Search')} ${
+          props.perspective.type === 'unified' ? 'All Contacts' : props.perspective.label
+        }`}
+        onChange={(e) => props.setSearch(e.currentTarget.value)}
       />
       {props.search.length > 0 && (
         <RetinaImg
@@ -141,7 +257,7 @@ export const ContactListSearch = ListensToFluxStore(ContactListSearchWithData, {
   getStateFromStores: () => ({
     perspective: Store.perspective(),
     search: Store.search(),
-    setSearch: s => Store.setSearch(s),
+    setSearch: (s) => Store.setSearch(s),
   }),
 });
 ContactListSearch.displayName = 'ContactListSearch';

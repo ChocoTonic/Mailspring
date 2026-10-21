@@ -1,9 +1,9 @@
-import temp from 'temp';
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import ini from 'ini';
+import { ICON_PATHS } from './utils/xdg-paths';
 
 const Context = {
   ACTIONS: 'actions',
@@ -19,15 +19,6 @@ const Context = {
   PLACES: 'places',
   STATUS: 'status',
 };
-
-const HOME = os.homedir();
-
-const ICON_THEME_PATHS = [
-  path.join(HOME, '.local/share/icons'),
-  path.join(HOME, '.icons'),
-  '/usr/share/icons',
-  '/usr/local/share/icons',
-];
 
 const DESKTOP = process.env.XDG_CURRENT_DESKTOP;
 
@@ -84,12 +75,7 @@ function __getDesktopSettingsPath(): string {
  */
 function __exec(cmd: string): string {
   try {
-    return cmd == null
-      ? null
-      : execSync(cmd)
-          .toString()
-          .trim()
-          .replace(/'/g, '');
+    return cmd == null ? null : execSync(cmd).toString().trim().replace(/'/g, '');
   } catch (error) {
     console.warn(error);
     return null;
@@ -138,7 +124,7 @@ function __parseIconTheme(themePath: string): IconThemeData | null {
 function getIconTheme(themeName: string): IconTheme {
   if (!themeName) return null;
 
-  for (const themesPath of ICON_THEME_PATHS) {
+  for (const themesPath of ICON_PATHS) {
     const themePath = path.join(themesPath, themeName);
     const parsed = __parseIconTheme(themePath);
     if (parsed != null) {
@@ -311,16 +297,16 @@ function getIcon(
  */
 function convertToPNG(iconName: string, iconPath: string) {
   try {
-    const version = execSync('convert --version')
-      .toString()
-      .trim();
+    const version = execFileSync('convert', ['--version']).toString().trim();
     if (!version) {
       console.warn('Cannot find ImageMagick');
       return null;
     }
-    const tmpFile = temp.openSync({ prefix: iconName, suffix: '.png' });
-    execSync(`convert ${iconPath} -transparent white ${tmpFile.path}`);
-    return tmpFile.path;
+    const tmpPath = path.join(os.tmpdir(), `${iconName}-${crypto.randomUUID()}.png`);
+    // An argv array keeps the shell out of it, so theme-supplied paths containing
+    // spaces or shell metacharacters reach `convert` intact.
+    execFileSync('convert', [iconPath, '-transparent', 'white', tmpPath]);
+    return tmpPath;
   } catch (error) {
     console.warn(error);
   }

@@ -9,8 +9,9 @@ import { localized, isRTL, initializeLocalization } from './intl';
 
 import { APIError } from './flux/errors';
 import WindowEventHandler from './window-event-handler';
+import { isWaylandSession } from './browser/is-wayland';
 
-function ensureInteger(f, fallback) {
+function ensureInteger(f: number, fallback: number) {
   let int = f;
   if (isNaN(f) || f === undefined || f === null) {
     int = fallback;
@@ -42,6 +43,10 @@ export default class AppEnvConstructor {
   errorLogger: any;
   savedState: any;
   isReloading: boolean;
+
+  // True once the constructor finishes. Guards against config IPC arriving
+  // re-entrantly mid-boot, before our other singletons are assigned.
+  bootComplete = false;
 
   /*
   Section: Construction and Destruction
@@ -134,8 +139,45 @@ export default class AppEnvConstructor {
     this.onWindowPropsReceived(() => {
       process.title = `Mailspring ${this.getWindowType()}`;
     });
+
+    // Shortcut phased out in April 2026, remove in June/July 2026
+    if (this.isMainWindow() && process.platform === 'win32') {
+      setTimeout(() => {
+        this.fixStaleWin32LaunchOnSystemStart();
+      }, 1000);
+    }
+
+    this.bootComplete = true;
   }
 
+  fixStaleWin32LaunchOnSystemStart() {
+    if (!process.env.APPDATA) {
+      return;
+    }
+    if (window.localStorage.getItem('fixStaleWin32LaunchOnSystemStart')) {
+      return;
+    }
+
+    window.localStorage.setItem('fixStaleWin32LaunchOnSystemStart', 'true');
+
+    const shortcutPath = path.join(
+      process.env.APPDATA,
+      'Microsoft',
+      'Windows',
+      'Start Menu',
+      'Programs',
+      'Startup',
+      'Mailspring.lnk'
+    );
+    const fs = require('fs');
+    const exists = fs.existsSync(shortcutPath);
+    if (exists) {
+      fs.unlink(shortcutPath, () => {});
+      const { SystemStartService } = require('mailspring-exports');
+      const service = new SystemStartService();
+      service.configureToLaunchOnSystemStart();
+    }
+  }
   // This ties window.onerror and process.uncaughtException,handledRejection
   // to the publically callable `reportError` method. This will take care of
   // reporting errors if necessary and hooking into error handling
@@ -164,15 +206,15 @@ export default class AppEnvConstructor {
       return this.reportError(originalError, { url, line: newLine, column: newColumn });
     };
 
-    process.on('uncaughtException', error => {
+    process.on('uncaughtException', (error: Error) => {
       this.reportError(error);
     });
 
-    process.on('unhandledRejection', error => {
+    process.on('unhandledRejection', (error: Error) => {
       this.reportError(error);
     });
 
-    window.addEventListener('unhandledrejection', e => {
+    window.addEventListener('unhandledrejection', (e) => {
       // This event is supposed to look like {reason, promise}, according to
       // https://developer.mozilla.org/en-US/docs/Web/API/PromiseRejectionEvent
       // In practice, it can have different shapes, so we make our best guess
@@ -199,8 +241,53 @@ export default class AppEnvConstructor {
   // `AppEnv.reportError` hooks into test failures and dev tool popups.
   //
   reportError(error, extra: any = {}) {
+    // Check if this error should be ignored and not reported to Sentry
+    // Errors marked noSentry have already been displayed to the user via a dialog.
+    if (error && error.noSentry) {
+      return;
+    }
+
+    const errorMessage = `${error}`.toLowerCase();
+
+    // ResizeObserver errors happen infrequently but spam Sentry with thousands of reports
+    if (errorMessage.includes('resizeobserver') || errorMessage.includes('resize observer')) {
+      return;
+    }
+
+    // File system errors that are commonly "file not found" or similar
+    if (errorMessage.includes('enoent')) {
+      return;
+    }
+
+    // Authentication errors - these are user configuration issues, not bugs
+    if (
+      errorMessage.includes('authentication error') ||
+      errorMessage.includes('check your username and password') ||
+      (errorMessage.includes('smtp') && errorMessage.includes('authentication'))
+    ) {
+      return;
+    }
+
     try {
-      extra.pluginIds = this._findPluginsFromError(error);
+      const matchedPackages = this._findPluginsFromError(error);
+      extra.pluginIds = matchedPackages.map((pkg) => pkg.name);
+
+      // Errors thrown from user-installed third-party (community) plugins are
+      // outside our control (stale APIs, missing deps, plugin bugs) and
+      // reporting them to Sentry creates noise we cannot act on — mirrors the
+      // reasoning in PackageManager.activatePackage for activation failures.
+      // Only skip when the crash's culprit frame (the top of the stack,
+      // i.e. where it was actually thrown) is inside a community plugin —
+      // not merely because some plugin frame appears elsewhere in the call
+      // chain. That keeps a core regression reachable through a plugin's
+      // callback from being silently swallowed.
+      const culpritPackages = this._culpritPackagesFromError(error);
+      if (
+        culpritPackages.length > 0 &&
+        culpritPackages.every((pkg) => !pkg.directory.startsWith(this.packages.resourcePath))
+      ) {
+        return;
+      }
     } catch (err) {
       // can happen when an error is thrown very early
       extra.pluginIds = [];
@@ -226,8 +313,8 @@ export default class AppEnvConstructor {
 
     if (
       error.message &&
-      ['EROFS', 'EPIPE', 'ENOSPC', 'EBUSY', 'EACCES', 'UNKNOWN: unknown error, open'].find(prefix =>
-        error.message.startsWith(prefix)
+      ['EROFS', 'EPIPE', 'ENOSPC', 'EBUSY', 'EACCES', 'UNKNOWN: unknown error, open'].find(
+        (prefix) => error.message.startsWith(prefix)
       )
     ) {
       // Don't fill Sentry with "couldn't open an attachment" type errors.
@@ -242,15 +329,28 @@ export default class AppEnvConstructor {
       return [];
     }
     const stackPaths = error.stack.match(/((?:\/[\w-_]+)+)/g) || [];
-    const stackPathComponents = _.uniq(_.flatten(stackPaths.map(p => p.split('/'))));
+    const stackPathComponents = [...new Set(stackPaths.flatMap((p) => p.split('/')))];
 
-    const names = [];
-    for (const pkg of this.packages.getActivePackages()) {
-      if (stackPathComponents.includes(path.basename(pkg.directory))) {
-        names.push(pkg.name);
-      }
+    return this.packages
+      .getActivePackages()
+      .filter((pkg) => stackPathComponents.includes(path.basename(pkg.directory)));
+  }
+
+  // Like `_findPluginsFromError`, but only considers the top frame of the
+  // stack (the culprit — where the error was actually thrown), not every
+  // frame in the call chain. V8 stacks are newest-first, so that's the
+  // first "at ..." line after the message.
+  _culpritPackagesFromError(error) {
+    if (!error.stack || typeof error.stack !== 'string') {
+      return [];
     }
-    return names;
+    const topFrame = error.stack.split('\n')[1] || '';
+    const stackPaths = topFrame.match(/((?:\/[\w-_]+)+)/g) || [];
+    const stackPathComponents = [...new Set(stackPaths.flatMap((p) => p.split('/')))];
+
+    return this.packages
+      .getActivePackages()
+      .filter((pkg) => stackPathComponents.includes(path.basename(pkg.directory)));
   }
 
   /*
@@ -357,16 +457,16 @@ export default class AppEnvConstructor {
   //
   // * `width` The {Number} of pixels.
   // * `height` The {Number} of pixels.
-  setSize(width, height) {
+  setSize(width: number, height: number) {
     return this.getCurrentWindow().setSize(ensureInteger(width, 100), ensureInteger(height, 100));
   }
 
-  setMinimumWidth(minWidth) {
+  setMinimumWidth(minWidth: number) {
     const win = this.getCurrentWindow();
     const minHeight = win.getMinimumSize()[1];
     win.setMinimumSize(ensureInteger(minWidth, 0), minHeight);
 
-    const [currWidth, currHeight] = Array.from(win.getSize());
+    const [currWidth, currHeight] = win.getSize();
     if (minWidth > currWidth) {
       win.setSize(minWidth, currHeight);
     }
@@ -384,7 +484,7 @@ export default class AppEnvConstructor {
   //
   // * `x` The {Number} of pixels.
   // * `y` The {Number} of pixels.
-  setPosition(x, y) {
+  setPosition(x: number, y: number) {
     return ipcRenderer.send(
       'call-window-method',
       'setPosition',
@@ -403,7 +503,8 @@ export default class AppEnvConstructor {
     if (process.platform === 'linux') {
       const dimensions = this.getWindowDimensions();
       const display =
-        require('@electron/remote').screen.getDisplayMatching(dimensions) || require('@electron/remote').screen.getPrimaryDisplay();
+        require('@electron/remote').screen.getDisplayMatching(dimensions) ||
+        require('@electron/remote').screen.getPrimaryDisplay();
       const x = display.bounds.x + (display.bounds.width - dimensions.width) / 2;
       const y = display.bounds.y + (display.bounds.height - dimensions.height) / 2;
 
@@ -453,7 +554,7 @@ export default class AppEnvConstructor {
   // - callback: A function to call when window props are received, just before
   //   the hot window is shown. The first parameter is the new windowProps.
   //
-  onWindowPropsReceived(callback) {
+  onWindowPropsReceived(callback: (...args: unknown[]) => void) {
     return this.emitter.on('window-props-received', callback);
   }
 
@@ -559,11 +660,20 @@ export default class AppEnvConstructor {
 
   restoreWindowDimensions() {
     const settings = this.getLoadSettings();
+
     let dimensions = this.savedState.windowDimensions;
     if (!this.isValidDimensions(dimensions)) {
       dimensions = this.getDefaultWindowDimensions();
     }
-    this.setWindowDimensions(dimensions);
+
+    // Wayland lets an app size its window but not position it, so restore only the size there and
+    // leave placement to the compositor and any userland scripts / extensions that remember it.
+    if (isWaylandSession()) {
+      this.setSize(dimensions.width, dimensions.height);
+    } else {
+      this.setWindowDimensions(dimensions);
+    }
+
     if (dimensions.maximized && !settings.initializeInBackground) {
       this.maximize();
     }
@@ -579,21 +689,21 @@ export default class AppEnvConstructor {
     }
   }
 
-  storeColumnWidth({ id, width }) {
+  storeColumnWidth({ id, width }: { id: string; width: number }) {
     if (this.savedState.columnWidths == null) {
       this.savedState.columnWidths = {};
     }
     this.savedState.columnWidths[id] = width;
   }
 
-  getColumnWidth(id) {
+  getColumnWidth(id: string) {
     if (this.savedState.columnWidths == null) {
       this.savedState.columnWidths = {};
     }
     return this.savedState.columnWidths[id];
   }
 
-  storeThreadListVerticalHeight(height) {
+  storeThreadListVerticalHeight(height: number) {
     this.savedState.threadListVerticalHeight = height;
   }
 
@@ -668,7 +778,11 @@ export default class AppEnvConstructor {
   // This also means that the windowType has changed and a different set of
   // plugins needs to be loaded.
   populateHotWindow(newLoadSettings) {
+    const previousWindowType = loadSettings.windowType;
     loadSettings = newLoadSettings;
+
+    document.body.classList.remove(`window-type-${previousWindowType}`);
+    document.body.classList.add(`window-type-${loadSettings.windowType}`);
 
     this.packages.activatePackages(loadSettings.windowType);
 
@@ -781,7 +895,10 @@ export default class AppEnvConstructor {
   }
 
   async showOpenDialog(options: Electron.OpenDialogOptions, callback: (paths: string[]) => void) {
-    const result = await require('@electron/remote').dialog.showOpenDialog(this.getCurrentWindow(), options);
+    const result = await require('@electron/remote').dialog.showOpenDialog(
+      this.getCurrentWindow(),
+      options
+    );
     callback(result.filePaths);
   }
 
@@ -789,7 +906,10 @@ export default class AppEnvConstructor {
     if (options.title == null) {
       options.title = 'Save File';
     }
-    const result = await require('@electron/remote').dialog.showSaveDialog(this.getCurrentWindow(), options);
+    const result = await require('@electron/remote').dialog.showSaveDialog(
+      this.getCurrentWindow(),
+      options
+    );
     callback(result.filePath);
   }
 

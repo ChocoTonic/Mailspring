@@ -38,8 +38,8 @@
 
 // STYLES
 
-*:focus,
-input:focus {
+// Suppress focus outlines for mouse/pointer navigation; show only for keyboard navigation
+*:focus:not(:focus-visible) {
   outline: none;
 }
 
@@ -49,7 +49,6 @@ input:focus {
   .scroll-region {
     width: 100%;
     height: 100%;
-    -webkit-font-smoothing: subpixel-antialiased;
   }
 
   .swipe-backing {
@@ -334,7 +333,7 @@ input:focus {
     zoom: 0.5;
     width: 81px;
     height: 51px;
-    margin: 9px 16px 0 16px;
+    margin: 9px 12px 0 12px;
   }
   .action.action-archive {
     background: url(@archive-img) center no-repeat, @background-gradient;
@@ -384,7 +383,7 @@ body.platform-win32 {
 .thread-list .list-item.selected:hover .list-column-HoverActions .inner {
   background-image: linear-gradient(
     to right,
-    fade(@list-selected-bg, 0%) 0%,
+    rgb(from @list-selected-bg r g b / 0) 0%,
     @list-selected-bg 50%,
     @list-selected-bg 100%
   );
@@ -393,7 +392,7 @@ body.platform-win32 {
 .thread-list .list-item.focused:hover .list-column-HoverActions .inner {
   background-image: linear-gradient(
     to right,
-    fade(@list-focused-bg, 0%) 0%,
+    rgb(from @list-focused-bg r g b / 0) 0%,
     @list-focused-bg 50%,
     @list-focused-bg 100%
   );
@@ -521,7 +520,7 @@ body.platform-win32 {
   .list-item.selected:hover .list-column-HoverActions .inner {
     background-image: linear-gradient(
       to right,
-      fade(@list-focused-bg, 0%) 0%,
+      rgb(from @list-focused-bg r g b / 0) 0%,
       @list-focused-bg 50%,
       @list-focused-bg 100%
     );
@@ -543,10 +542,21 @@ body.is-blurred {
   .thread-list.handler-split {
     .list-item {
       &.selected {
-        background: fadeout(desaturate(@list-focused-bg, 100%), 65%);
-        border-bottom: 1px solid fadeout(desaturate(@list-focused-border, 100%), 65%);
+        background: hsl(from @list-focused-bg h 0% l / 35%);
+        border-bottom: 1px solid hsl(from @list-focused-border h 0% l / 35%);
         color: @text-color;
       }
     }
+  }
+}
+
+.thread-list-vertical {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  border-top: 1px solid @border-color-divider;
+  .sheet-toolbar { 
+    -webkit-app-region: none;
   }
 }

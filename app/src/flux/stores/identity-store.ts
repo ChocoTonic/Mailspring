@@ -8,9 +8,10 @@ import * as Actions from '../actions';
 import KeyManager from '../../key-manager';
 import { makeRequest, rootURLForServer } from '../mailspring-api-request';
 import { Disposable } from 'event-kit';
+import { debounce } from 'underscore';
 
 // Note this key name is used when migrating to Mailspring Pro accounts from old N1.
-const KEYCHAIN_NAME = 'Mailspring Account';
+const PASSWORD_NAME = 'Mailspring Account';
 
 export interface IIdentity {
   id: string;
@@ -41,6 +42,7 @@ export const EMPTY_FEATURE_USAGE = {
 
 class _IdentityStore extends MailspringStore {
   _identity: IIdentity = null;
+  _displayedPasswordError = false;
   _disp: Disposable;
 
   constructor() {
@@ -87,18 +89,22 @@ class _IdentityStore extends MailspringStore {
 
   _fetchAndPollRemoteIdentity() {
     if (!AppEnv.isMainWindow()) return;
-    setTimeout(() => {
-      this.fetchIdentity();
-    }, 1000);
-    setInterval(() => {
-      this.fetchIdentity();
-    }, 1000 * 60 * 10); // 10 minutes
+    const poll = () => {
+      // fetchIdentity can still reject for reasons other than the network request
+      // itself (eg saveIdentity's keychain/config writes) - catch here too so a
+      // background poll never produces an unhandled promise rejection.
+      this.fetchIdentity().catch((err) => {
+        console.warn('IdentityStore: background identity poll failed:', err);
+      });
+    };
+    setTimeout(poll, 1000);
+    setInterval(poll, 1000 * 60 * 10); // 10 minutes
   }
 
   async saveIdentity(identity: IIdentity | null) {
     if (!identity) {
       this._identity = null;
-      await KeyManager.deletePassword(KEYCHAIN_NAME);
+      await KeyManager.deletePassword(PASSWORD_NAME);
       AppEnv.config.set('identity', null);
       return;
     }
@@ -114,7 +120,7 @@ class _IdentityStore extends MailspringStore {
       // Note: We /must/ await this because calling config.set below
       // will try to retrieve the password via getPassword.
       // If this fails, the app may quit here.
-      await KeyManager.replacePassword(KEYCHAIN_NAME, nextToken);
+      await KeyManager.replacePassword(PASSWORD_NAME, nextToken);
     }
 
     this._identity = identity;
@@ -132,12 +138,26 @@ class _IdentityStore extends MailspringStore {
   _onIdentityChanged = async () => {
     const value = AppEnv.config.get('identity');
     this._identity = value
-      ? { ...value, token: await KeyManager.getPassword(KEYCHAIN_NAME) }
+      ? { ...value, token: await KeyManager.getPassword(PASSWORD_NAME) }
       : null;
+
+    if (this._identity && !this._identity.token) {
+      const message = `Your Mailspring ID password could not be loaded from your keychain. Please visit Preferences > Subscription and click "Setup Mailspring ID" to sign in to your Mailspring account again.\n\nYour Mailspring ID email address is ${this._identity.emailAddress}.`;
+      console.warn(message);
+
+      if (!this._displayedPasswordError) {
+        this._displayedPasswordError = true;
+        AppEnv.showErrorDialog({ title: 'Please Sign In', message });
+      }
+      this._identity = null;
+    }
+
     this.trigger();
   };
 
   _onLogoutMailspringIdentity = async () => {
+    // Do not touch the keychain or restart the app during specs.
+    if (AppEnv.inSpecMode()) return;
     await this.saveIdentity(null);
     // We need to relaunch the app to clear the webview session
     // and prevent the webview from re signing in with the same MailspringID
@@ -202,16 +222,35 @@ class _IdentityStore extends MailspringStore {
     }
   }
 
+  fetchIdentitySoon = debounce(
+    () => {
+      this.fetchIdentity().catch((err) => {
+        console.warn('IdentityStore: fetchIdentitySoon failed:', err);
+      });
+    },
+    5000,
+    true
+  );
+
   async fetchIdentity() {
     if (!this._identity || !this._identity.token) {
       return null;
     }
 
-    const json = await makeRequest({
-      server: 'identity',
-      path: '/api/me',
-      method: 'GET',
-    });
+    let json;
+    try {
+      json = await makeRequest({
+        server: 'identity',
+        path: '/api/me',
+        method: 'GET',
+      });
+    } catch (err) {
+      // Network failures here are routine (offline, timeouts, dropped connections)
+      // and will be retried by the next poll - don't let them reject and become
+      // unhandled promise rejections that get reported to Sentry.
+      console.warn('IdentityStore.fetchIdentity failed:', err);
+      return this._identity;
+    }
 
     if (!json || !json.id) {
       AppEnv.reportError(new Error('/api/me returned invalid json'), json || {});

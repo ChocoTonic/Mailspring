@@ -22,9 +22,10 @@
  * C:\Users\<USERNAME>\AppData\Local\Mailspring\nylas.exe
  */
 const ChildProcess = require('child_process');
-const fs = require('fs-plus');
+const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { shell } = require('electron');
 
 // C:\Users\<USERNAME>\AppData\Local\Mailspring\app-x.x.x
 const appFolder = path.resolve(process.execPath, '..');
@@ -38,6 +39,14 @@ const updateDotExe = path.join(rootAppDataFolder, 'Update.exe');
 // "mailspring.exe"
 const exeName = path.basename(process.execPath);
 
+// Copy the real environment onto a null-prototype object before spawning, so a
+// child inherits only genuine own variables. A plain object would additionally
+// expose anything present on Object.prototype, which a prototype-pollution bug
+// elsewhere in the process could abuse. See GHSA-gjr7-3mj2-cr54.
+function sanitizedEnv(base) {
+  return Object.assign(Object.create(null), base || process.env);
+}
+
 // Spawn a command and invoke the callback when it completes with an error
 // and the output from standard out.
 function spawn(command, args, callback, options = {}) {
@@ -45,19 +54,22 @@ function spawn(command, args, callback, options = {}) {
   let spawnedProcess = null;
 
   try {
-    spawnedProcess = ChildProcess.spawn(command, args, options);
+    spawnedProcess = ChildProcess.spawn(command, args, {
+      ...options,
+      env: sanitizedEnv(options.env),
+    });
   } catch (error) {
     // Spawn can throw an error
     setTimeout(() => callback && callback(error, stdout), 0);
     return;
   }
 
-  spawnedProcess.stdout.on('data', data => {
+  spawnedProcess.stdout.on('data', (data) => {
     stdout += data;
   });
 
   let error = null;
-  spawnedProcess.on('error', processError => {
+  spawnedProcess.on('error', (processError) => {
     error = error || processError;
   });
 
@@ -75,20 +87,31 @@ function spawn(command, args, callback, options = {}) {
   });
 }
 
+// Spawn a command in detached mode without waiting for completion.
+// This is used for Squirrel hooks where we need to exit quickly to avoid
+// hitting Squirrel's 15-second timeout.
+// See: https://github.com/Squirrel/Squirrel.Windows/issues/501
+function spawnDetached(command, args) {
+  try {
+    const child = ChildProcess.spawn(command, args, {
+      detached: true,
+      stdio: 'ignore',
+      env: sanitizedEnv(),
+    });
+    child.unref();
+  } catch (error) {
+    console.error(`Failed to spawn detached process: ${command} ${args.join(' ')}`, error.message);
+  }
+}
+
 // Spawn the Update.exe with the given arguments and invoke the callback when
 // the command completes.
 function spawnUpdate(args, callback, options = {}) {
   spawn(updateDotExe, args, callback, options);
 }
 
-// Create a desktop and start menu shortcut by using the command line API
-// provided by Squirrel's Update.exe
-function createShortcuts(callback) {
-  spawnUpdate(['--createShortcut', exeName], callback);
-}
-
 function createRegistryEntries({ allowEscalation, registerDefaultIfPossible }, callback) {
-  const escapeBackticks = str => str.replace(/\\/g, '\\\\');
+  const escapeBackticks = (str) => str.replace(/\\/g, '\\\\');
 
   const isWindows7 = os.release().startsWith('6.1');
   const requiresLocalMachine = isWindows7;
@@ -136,7 +159,7 @@ function createRegistryEntries({ allowEscalation, registerDefaultIfPossible }, c
 
       const importTempPath = path.join(os.tmpdir(), `mailspring-reg-${Date.now()}.reg`);
 
-      fs.writeFile(importTempPath, importContents, writeErr => {
+      fs.writeFile(importTempPath, importContents, (writeErr) => {
         if (writeErr) {
           callback(writeErr);
           return;
@@ -145,13 +168,13 @@ function createRegistryEntries({ allowEscalation, registerDefaultIfPossible }, c
         spawn(
           spawnPath,
           spawnArgs.concat(['import', escapeBackticks(importTempPath)]),
-          spawnErr => {
+          (spawnErr) => {
             if (isWindows7 && registerDefaultIfPossible) {
               const defaultReg = path.join(appFolder, 'resources', 'mailspring-mailto-default.reg');
               spawn(
                 spawnPath,
                 spawnArgs.concat(['import', escapeBackticks(defaultReg)]),
-                spawnDefaultErr => {
+                (spawnDefaultErr) => {
                   callback(spawnDefaultErr, true);
                 }
               );
@@ -165,46 +188,235 @@ function createRegistryEntries({ allowEscalation, registerDefaultIfPossible }, c
   );
 }
 
-function installVisualElementsXML(callback) {
-  try {
-    fs.copyFileSync(
-      path.join(appFolder, 'resources', 'mailspring-75px.png'),
-      path.join(rootAppDataFolder, 'mailspring-75px.png')
-    );
-    fs.copyFileSync(
-      path.join(appFolder, 'resources', 'mailspring-150px.png'),
-      path.join(rootAppDataFolder, 'mailspring-150px.png')
-    );
-    fs.copyFileSync(
-      path.join(appFolder, 'resources', 'mailspring.VisualElementsManifest.xml'),
-      path.join(rootAppDataFolder, 'mailspring.VisualElementsManifest.xml')
-    );
-  } catch (err) {
-    console.warn(err);
-    // no-op
-  }
-  callback();
-}
-
-// Remove the desktop and start menu shortcuts by using the command line API
-// provided by Squirrel's Update.exe
-function removeShortcuts(callback) {
-  spawnUpdate(['--removeShortcut', exeName], callback);
-}
-
 exports.spawn = spawnUpdate;
-exports.createShortcuts = createShortcuts;
-exports.removeShortcuts = removeShortcuts;
-exports.installVisualElementsXML = installVisualElementsXML;
 exports.createRegistryEntries = createRegistryEntries;
 
 // Is the Update.exe installed with Mailspring?
 exports.existsSync = () => fs.existsSync(updateDotExe);
 
-// Restart Mailspring using the version pointed to by the Mailspring.cmd shim
-exports.restartMailspring = app => {
+// Register the AppUserModelId with a display name so Windows notifications
+// show "Mailspring" instead of "com.squirrel.mailspring.mailspring"
+// Registry path: HKEY_CURRENT_USER\SOFTWARE\Classes\AppUserModelId\{AUMID}
+function registerAppUserModelId(callback) {
+  const aumid = 'com.squirrel.mailspring.mailspring';
+  const displayName = 'Mailspring';
+  const iconPath = path.join(appFolder, 'resources', 'mailspring-square.ico');
+
+  let regPath = 'reg.exe';
+  if (process.env.SystemRoot) {
+    regPath = path.join(process.env.SystemRoot, 'System32', 'reg.exe');
+  }
+
+  const regKey = `HKEY_CURRENT_USER\\SOFTWARE\\Classes\\AppUserModelId\\${aumid}`;
+
+  // Add the DisplayName value
+  spawn(
+    regPath,
+    ['add', regKey, '/v', 'DisplayName', '/t', 'REG_SZ', '/d', displayName, '/f'],
+    (err) => {
+      if (err) {
+        console.warn('Failed to register AUMID DisplayName:', err);
+      }
+      // Also add IconUri if the icon exists
+      if (fs.existsSync(iconPath)) {
+        spawn(
+          regPath,
+          ['add', regKey, '/v', 'IconUri', '/t', 'REG_SZ', '/d', iconPath, '/f'],
+          (iconErr) => {
+            if (iconErr) {
+              console.warn('Failed to register AUMID IconUri:', iconErr);
+            }
+            if (callback) callback(err || iconErr);
+          }
+        );
+      } else {
+        if (callback) callback(err);
+      }
+    }
+  );
+}
+
+exports.registerAppUserModelId = registerAppUserModelId;
+
+// Copy Start Menu tile visual elements (icon PNGs + manifest XML) from the
+// current app-x.x.x/resources directory to the root install directory so
+// Windows can display a branded tile. Errors are ignored — these are optional.
+function copyVisualElements() {
+  try {
+    const files = [
+      'mailspring-75px.png',
+      'mailspring-150px.png',
+      'mailspring.VisualElementsManifest.xml',
+    ];
+    for (const file of files) {
+      fs.copyFileSync(path.join(appFolder, 'resources', file), path.join(rootAppDataFolder, file));
+    }
+  } catch (err) {
+    // Ignore errors - visual elements are optional
+  }
+}
+
+// Restart Mailspring using the version pointed to by the Mailspring.cmd shim.
+// Uses spawnDetached to ensure the child process survives the parent's exit —
+// the piped-stdio `spawn` function can fail when called during `will-quit`
+// because the Node.js event loop tears down the pipe before Update.exe launches
+// the new app instance.
+//
+// Uses --processStartAndWait (not --processStart) so that Update.exe waits for
+// the current instance to fully release requestSingleInstanceLock() before
+// launching the new one. Without the Wait variant, the new instance can start
+// before the old one exits, hit the single-instance lock, and immediately quit
+// — leaving no running instance. See: https://github.com/electron/electron/pull/6037
+exports.restartMailspring = (app) => {
   app.once('will-quit', () => {
-    spawnUpdate(['--processStart', exeName], () => {}, { detached: true });
+    spawnDetached(updateDotExe, ['--processStartAndWait', exeName]);
   });
+  app.quit();
+};
+
+// Handle --squirrel-install event with fast exit.
+// Squirrel.Windows has a 15-second timeout for hooks. We spawn all necessary
+// processes in detached mode and exit immediately to avoid timeout.
+// See: https://github.com/Squirrel/Squirrel.Windows/issues/501
+// See: https://github.com/Squirrel/Squirrel.Windows/issues/1145
+exports.handleSquirrelInstall = (app) => {
+  // Spawn Update.exe to create shortcuts (detached - won't block exit)
+  spawnDetached(updateDotExe, [
+    '--createShortcut',
+    exeName,
+    '--shortcut-locations',
+    'Desktop,StartMenu',
+  ]);
+
+  copyVisualElements();
+
+  // Create fallback shortcuts synchronously (fast)
+  const startMenuPath = path.join(
+    process.env.APPDATA,
+    'Microsoft',
+    'Windows',
+    'Start Menu',
+    'Programs',
+    'Mailspring.lnk'
+  );
+  const desktopPath = path.join(
+    process.env.USERPROFILE || process.env.HOME,
+    'Desktop',
+    'Mailspring.lnk'
+  );
+  const iconPath = path.join(appFolder, 'resources', 'mailspring-square.ico');
+
+  const shortcutOptions = {
+    target: updateDotExe,
+    args: '--processStart mailspring.exe',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    iconIndex: 0,
+    description: 'The best email app for people and teams at work',
+    appUserModelId: 'com.squirrel.mailspring.mailspring',
+    toastActivatorClsid: '{E6AD16B0-2830-48E7-9DB7-439152FA917B}',
+  };
+
+  try {
+    if (!fs.existsSync(startMenuPath)) {
+      shell.writeShortcutLink(startMenuPath, 'create', shortcutOptions);
+    }
+  } catch (err) {
+    // Ignore - Squirrel's method might succeed
+  }
+
+  try {
+    if (!fs.existsSync(desktopPath)) {
+      shell.writeShortcutLink(desktopPath, 'create', shortcutOptions);
+    }
+  } catch (err) {
+    // Ignore - Squirrel's method might succeed
+  }
+
+  // Spawn reg.exe to register AUMID (detached - won't block exit)
+  const aumid = 'com.squirrel.mailspring.mailspring';
+  const regKey = `HKEY_CURRENT_USER\\SOFTWARE\\Classes\\AppUserModelId\\${aumid}`;
+  let regPath = 'reg.exe';
+  if (process.env.SystemRoot) {
+    regPath = path.join(process.env.SystemRoot, 'System32', 'reg.exe');
+  }
+  spawnDetached(regPath, [
+    'add',
+    regKey,
+    '/v',
+    'DisplayName',
+    '/t',
+    'REG_SZ',
+    '/d',
+    'Mailspring',
+    '/f',
+  ]);
+  if (fs.existsSync(iconPath)) {
+    spawnDetached(regPath, ['add', regKey, '/v', 'IconUri', '/t', 'REG_SZ', '/d', iconPath, '/f']);
+  }
+
+  // Registry entries for mailto: protocol are registered on first normal app launch
+  // (via createRegistryEntries call in main.js startup). This ensures registration
+  // completes even if the detached processes here don't finish before Squirrel's timeout.
+
+  // Exit immediately - don't wait for spawned processes
+  app.quit();
+};
+
+// Handle --squirrel-updated event with fast exit.
+// Squirrel runs the NEW app version with this flag after extracting an update.
+// We update shortcuts to point to the new version and exit immediately.
+// The actual app restart happens later when the user clicks "Install Update".
+exports.handleSquirrelUpdated = (app) => {
+  // Update shortcuts to point to the new app version (detached - won't block exit)
+  spawnDetached(updateDotExe, [
+    '--createShortcut',
+    exeName,
+    '--shortcut-locations',
+    'Desktop,StartMenu',
+  ]);
+
+  copyVisualElements();
+
+  // Exit immediately - don't wait for spawned processes
+  app.quit();
+};
+
+// Handle --squirrel-uninstall event with fast exit.
+exports.handleSquirrelUninstall = (app) => {
+  // Spawn Update.exe to remove shortcuts (detached - won't block exit)
+  spawnDetached(updateDotExe, ['--removeShortcut', exeName]);
+
+  // Try to remove fallback shortcuts synchronously
+  const startMenuPath = path.join(
+    process.env.APPDATA,
+    'Microsoft',
+    'Windows',
+    'Start Menu',
+    'Programs',
+    'Mailspring.lnk'
+  );
+  const desktopPath = path.join(
+    process.env.USERPROFILE || process.env.HOME,
+    'Desktop',
+    'Mailspring.lnk'
+  );
+
+  try {
+    if (fs.existsSync(startMenuPath)) {
+      fs.unlinkSync(startMenuPath);
+    }
+  } catch (err) {
+    // Ignore
+  }
+
+  try {
+    if (fs.existsSync(desktopPath)) {
+      fs.unlinkSync(desktopPath);
+    }
+  } catch (err) {
+    // Ignore
+  }
+
+  // Exit immediately
   app.quit();
 };

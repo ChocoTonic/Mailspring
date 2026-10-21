@@ -1,14 +1,6 @@
-/* eslint jsx-a11y/tabindex-no-positive: 0 */
 import React from 'react';
 import ReactDOM from 'react-dom';
-import {
-  Rx,
-  PropTypes,
-  Thread,
-  DatabaseStore,
-  localized,
-  FeatureUsageStore,
-} from 'mailspring-exports';
+import { Rx, Thread, DatabaseStore, localized, FeatureUsageStore } from 'mailspring-exports';
 import { RetinaImg } from 'mailspring-component-kit';
 
 import CopyButton from './copy-button';
@@ -21,11 +13,6 @@ export default class ThreadSharingPopover extends React.Component<
   },
   { saving: boolean; url: string }
 > {
-  static propTypes = {
-    thread: PropTypes.object,
-    accountId: PropTypes.string,
-  };
-
   _mounted = false;
   _disposable?: any;
 
@@ -43,7 +30,7 @@ export default class ThreadSharingPopover extends React.Component<
     this._mounted = true;
     this._disposable = Rx.Observable.fromQuery(
       DatabaseStore.find<Thread>(Thread, thread.id)
-    ).subscribe(t => {
+    ).subscribe((t) => {
       if (!t) return;
       this.setState({ url: sharingURLForThread(t) });
     });
@@ -102,8 +89,8 @@ export default class ThreadSharingPopover extends React.Component<
     this.setState({ saving: false, url: nextUrl });
   };
 
-  _onClickInput = event => {
-    event.target.select();
+  _onClickInput = (event: React.MouseEvent<HTMLInputElement>) => {
+    event.currentTarget.select();
   };
 
   render() {
@@ -111,7 +98,7 @@ export default class ThreadSharingPopover extends React.Component<
 
     // tabIndex is necessary for the popover's onBlur events to work properly
     return (
-      <div tabIndex={1} className={`thread-sharing-popover ${!url && 'disabled'}`}>
+      <div tabIndex={-1} className={`thread-sharing-popover ${!url && 'disabled'}`}>
         <div className="share-toggle">
           {saving ? (
             <label htmlFor="shareCheckbox">
@@ -123,7 +110,7 @@ export default class ThreadSharingPopover extends React.Component<
               {localized('Syncing') + '...'}
               <div className="meta">
                 {localized(
-                  `Mailspring is syncing this thread and it's attachments to the cloud. For long threads, this may take a moment.`
+                  `Mailspring is syncing this thread and its attachments to the cloud. For long threads, this may take a moment.`
                 )}
               </div>
             </label>
@@ -144,7 +131,7 @@ export default class ThreadSharingPopover extends React.Component<
             </label>
           )}
           <div className="meta">
-            <a href="https://community.getmailspring.com/t/share-email-conversations-with-shareable-links/165">
+            <a href="https://getmailspring.com/docs/share-email-conversations-with-shareable-links">
               {localized('Learn More')}
             </a>
           </div>

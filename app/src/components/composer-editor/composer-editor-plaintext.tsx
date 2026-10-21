@@ -1,6 +1,6 @@
 import React from 'react';
 import { wrapPlaintextWithSelection } from './plaintext';
-import { handleFilePasted } from './composer-editor';
+import { handleFilePasted, shouldAttachPastedFile } from './composer-editor';
 
 interface ComposerEditorPlaintextProps {
   value: string;
@@ -65,9 +65,9 @@ export class ComposerEditorPlaintext extends React.Component<ComposerEditorPlain
 
   removeQuotedText = () => {};
 
-  insertInlineAttachment = file => {};
+  insertInlineAttachment = (file) => {};
 
-  onFocusIfBlurred = event => {
+  onFocusIfBlurred = (_event: React.FocusEvent<HTMLTextAreaElement>) => {
     this._el.current.focus();
   };
 
@@ -75,7 +75,7 @@ export class ComposerEditorPlaintext extends React.Component<ComposerEditorPlain
   // to the end of text. If you tabbed in from the Subject field and there's quoted or
   // forwarded text this is not great. For now, let's aggressively shift selection to
   // the end of the user content.
-  onFocus = event => {
+  onFocus = (_event: React.FocusEvent<HTMLTextAreaElement>) => {
     if (!this._el.current) return;
     if (this._el.current.value.length === this._el.current.selectionStart) {
       this.focusEndReplyText();
@@ -108,7 +108,11 @@ export class ComposerEditorPlaintext extends React.Component<ComposerEditorPlain
 
   onPaste = (event: React.ClipboardEvent<any>) => {
     const { onFileReceived } = this.props;
-    if (onFileReceived && handleFilePasted(event.nativeEvent, onFileReceived)) {
+    if (
+      onFileReceived &&
+      shouldAttachPastedFile(event.nativeEvent.clipboardData) &&
+      handleFilePasted(event.nativeEvent, onFileReceived)
+    ) {
       event.preventDefault();
     }
   };
@@ -120,8 +124,11 @@ export class ComposerEditorPlaintext extends React.Component<ComposerEditorPlain
 
     if (value !== wrapped.value) {
       event.target.value = wrapped.value;
-      event.target.setSelectionRange(wrapped.selectionStart, wrapped.selectionEnd, event.target
-        .selectionDirection as any);
+      event.target.setSelectionRange(
+        wrapped.selectionStart,
+        wrapped.selectionEnd,
+        event.target.selectionDirection as any
+      );
     }
     this.updateHeight();
   };

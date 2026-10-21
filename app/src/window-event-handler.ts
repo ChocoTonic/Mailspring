@@ -2,9 +2,9 @@
 import { shell, ipcRenderer } from 'electron';
 import url from 'url';
 import { localized } from './intl';
+import { developerToolsAvailable } from './developer-tools';
 
 let ComponentRegistry = null;
-let Spellchecker = null;
 
 const isIFrame = (node: EventTarget) => {
   return node instanceof HTMLElement && node.tagName === 'IFRAME';
@@ -34,6 +34,7 @@ const isTextInput = (node: EventTarget) => {
 export default class WindowEventHandler {
   unloadCallbacks = [];
   unloadCompleteCallbacks = [];
+  _openExternalErrorShown = false;
 
   constructor() {
     setTimeout(() => this.showDevModeMessages(), 1);
@@ -62,15 +63,7 @@ export default class WindowEventHandler {
       AppEnv.commands.dispatch(command, args[0]);
     });
 
-    ipcRenderer.on('scroll-touch-begin', () => {
-      window.dispatchEvent(new Event('scroll-touch-begin'));
-    });
-
-    ipcRenderer.on('scroll-touch-end', () => {
-      window.dispatchEvent(new Event('scroll-touch-end'));
-    });
-
-    window.onbeforeunload = e => {
+    window.onbeforeunload = (e: BeforeUnloadEvent) => {
       if (AppEnv.inSpecMode()) {
         return undefined;
       }
@@ -100,9 +93,11 @@ export default class WindowEventHandler {
       AppEnv.reload();
     });
 
-    AppEnv.commands.add(document.body, 'window:toggle-dev-tools', () => {
-      AppEnv.toggleDevTools();
-    });
+    if (developerToolsAvailable()) {
+      AppEnv.commands.add(document.body, 'window:toggle-dev-tools', () => {
+        AppEnv.toggleDevTools();
+      });
+    }
 
     AppEnv.commands.add(document.body, 'window:open-mailsync-logs', () => {
       AppEnv.mailsyncBridge.openLogs();
@@ -140,14 +135,29 @@ export default class WindowEventHandler {
     };
 
     AppEnv.commands.add(document.body, {
-      'core:copy': e => (isIFrame(e.target) ? webContents.copy() : document.execCommand('copy')),
-      'core:cut': e => (isIFrame(e.target) ? webContents.cut() : document.execCommand('cut')),
+      'core:copy': (e: CustomEvent) =>
+        isIFrame(e.target) ? webContents.copy() : document.execCommand('copy'),
+      'core:cut': (e: CustomEvent) =>
+        isIFrame(e.target) ? webContents.cut() : document.execCommand('cut'),
       'core:paste': () => webContents.paste(),
       'core:paste-and-match-style': () => webContents.pasteAndMatchStyle(),
-      'core:undo': e => (isTextInput(e.target) ? webContents.undo() : getUndoStore().undo()),
-      'core:redo': e => (isTextInput(e.target) ? webContents.redo() : getUndoStore().redo()),
-      'core:select-all': e =>
-        isIFrame(e.target) || isTextInput(e.target) ? webContents.selectAll() : AppEnv.commands.dispatch('multiselect-list:select-all'),
+      'core:undo': (e: CustomEvent) =>
+        isTextInput(e.target) ? webContents.undo() : getUndoStore().undo(),
+      'core:redo': (e: CustomEvent) =>
+        isTextInput(e.target) ? webContents.redo() : getUndoStore().redo(),
+      'core:select-all': (e: CustomEvent) =>
+        isIFrame(e.target) || isTextInput(e.target)
+          ? webContents.selectAll()
+          : AppEnv.commands.dispatch('multiselect-list:select-all'),
+    });
+
+    webContents.on('input-event', (e, input) => {
+      if (input.type === 'gestureScrollBegin') {
+        window.dispatchEvent(new Event('gesture-scroll-begin'));
+      }
+      if (input.type === 'gestureScrollEnd') {
+        window.dispatchEvent(new Event('gesture-scroll-end'));
+      }
     });
 
     // "Pinch to zoom" on the Mac gets translated by the system into a
@@ -168,15 +178,78 @@ export default class WindowEventHandler {
       }
     });
 
-    document.addEventListener('contextmenu', event => {
-      const nodeName = (event.target as HTMLElement).nodeName;
-      if (nodeName === 'INPUT' || nodeName === 'TEXTAREA') {
-        this.openContextualMenuForInput(event);
+    // Handle context menu for all editable areas with native spellcheck
+    webContents.on('context-menu', (event, params) => {
+      // Only handle if we're in an editable area
+      if (!params.isEditable) {
+        return;
       }
+
+      const { Menu, MenuItem } = require('@electron/remote');
+      const menu = new Menu();
+
+      // Add spelling suggestions if there's a misspelled word
+      if (params.misspelledWord) {
+        if (params.dictionarySuggestions && params.dictionarySuggestions.length > 0) {
+          for (const suggestion of params.dictionarySuggestions) {
+            menu.append(
+              new MenuItem({
+                label: suggestion,
+                click: () => webContents.replaceMisspelling(suggestion),
+              })
+            );
+          }
+        } else {
+          menu.append(new MenuItem({ label: localized('No Guesses Found'), enabled: false }));
+        }
+        menu.append(new MenuItem({ type: 'separator' }));
+
+        menu.append(
+          new MenuItem({
+            label: localized('Learn Spelling'),
+            click: () => {
+              webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord);
+            },
+          })
+        );
+        menu.append(new MenuItem({ type: 'separator' }));
+      }
+
+      // Add standard edit menu items using editFlags from Electron
+      menu.append(
+        new MenuItem({
+          label: localized('Cut'),
+          enabled: params.editFlags.canCut,
+          click: () => webContents.cut(),
+        })
+      );
+      menu.append(
+        new MenuItem({
+          label: localized('Copy'),
+          enabled: params.editFlags.canCopy,
+          click: () => webContents.copy(),
+        })
+      );
+      menu.append(
+        new MenuItem({
+          label: localized('Paste'),
+          enabled: params.editFlags.canPaste,
+          click: () => webContents.paste(),
+        })
+      );
+      menu.append(
+        new MenuItem({
+          label: localized('Paste and Match Style'),
+          enabled: params.editFlags.canPaste,
+          click: () => webContents.pasteAndMatchStyle(),
+        })
+      );
+
+      menu.popup({});
     });
 
     // Prevent form submits from changing the current window's URL
-    document.addEventListener('submit', event => {
+    document.addEventListener('submit', (event) => {
       if ((event.target as HTMLElement).nodeName === 'FORM') {
         event.preventDefault();
       }
@@ -196,7 +269,7 @@ export default class WindowEventHandler {
   }
 
   removeUnloadCallback(callback) {
-    this.unloadCallbacks = this.unloadCallbacks.filter(cb => cb !== callback);
+    this.unloadCallbacks = this.unloadCallbacks.filter((cb) => cb !== callback);
   }
 
   runUnloadCallbacks() {
@@ -297,102 +370,22 @@ export default class WindowEventHandler {
       const sanitized = encodeURI(decodeURI(resolved));
       require('@electron/remote').getGlobal('application').openUrl(sanitized);
     } else if (['http:', 'https:', 'tel:'].includes(protocol)) {
-      shell.openExternal(resolved, { activate: !metaKey });
+      shell.openExternal(resolved, { activate: !metaKey }).catch((err: Error) => {
+        if (!this._openExternalErrorShown) {
+          this._openExternalErrorShown = true;
+          AppEnv.showErrorDialog({
+            title: localized('Failed to Open Link'),
+            message: localized(
+              'Mailspring was unable to open the link in your browser.\n\n%@',
+              err.message
+            ),
+          });
+        } else {
+          console.error(`Failed to open link: ${err.message}`);
+        }
+      });
     }
     return;
-  }
-
-  openContextualMenuForInput(event) {
-    event.preventDefault();
-
-    const textualInputs = ['text', 'password', 'email', 'number', 'range', 'search', 'tel', 'url'];
-    if (event.target.nodeName === 'INPUT' && !textualInputs.includes(event.target.type)) {
-      return;
-    }
-
-    const supportsCutCopy = event.target.type !== 'password';
-    if (!supportsCutCopy) {
-      this.openSpellingMenuFor('', false, {});
-      return;
-    }
-
-    const hasSelectedText = event.target.selectionStart !== event.target.selectionEnd;
-    let wordStart = null;
-    let wordEnd = null;
-
-    if (hasSelectedText) {
-      wordStart = event.target.selectionStart;
-      wordEnd = event.target.selectionEnd;
-    } else {
-      wordStart = event.target.value.lastIndexOf(' ', event.target.selectionStart);
-      if (wordStart === -1) {
-        wordStart = 0;
-      }
-      wordEnd = event.target.value.indexOf(' ', event.target.selectionStart);
-      if (wordEnd === -1) {
-        wordEnd = event.target.value.length;
-      }
-    }
-    const word = event.target.value.substr(wordStart, wordEnd - wordStart);
-
-    this.openSpellingMenuFor(word, hasSelectedText, {
-      onCorrect: (correction: string) => {
-        const insertionPoint = wordStart + correction.length;
-        event.target.value = event.target.value.replace(word, correction);
-        event.target.setSelectionRange(insertionPoint, insertionPoint);
-      },
-    });
-  }
-
-  async openSpellingMenuFor(
-    word,
-    hasSelectedText,
-    {
-      onCorrect,
-      onRestoreSelection = () => { },
-    }: { onCorrect?: (correction: string) => void; onRestoreSelection?: () => void }
-  ) {
-    const { Menu, MenuItem } = require('@electron/remote');
-    const menu = new Menu();
-
-    if (word) {
-      Spellchecker = Spellchecker || require('./spellchecker').default;
-      await Spellchecker.appendSpellingItemsToMenu({ menu, word, onCorrect });
-    }
-
-    menu.append(
-      new MenuItem({
-        label: localized('Cut'),
-        enabled: hasSelectedText,
-        click: () => AppEnv.commands.dispatch('core:cut'),
-      })
-    );
-    menu.append(
-      new MenuItem({
-        label: localized('Copy'),
-        enabled: hasSelectedText,
-        click: () => AppEnv.commands.dispatch('core:copy'),
-      })
-    );
-    menu.append(
-      new MenuItem({
-        label: localized('Paste'),
-        click: () => {
-          onRestoreSelection();
-          AppEnv.commands.dispatch('core:paste');
-        },
-      })
-    );
-    menu.append(
-      new MenuItem({
-        label: localized('Paste and Match Style'),
-        click: () => {
-          onRestoreSelection();
-          AppEnv.commands.dispatch('core:paste-and-match-style');
-        },
-      })
-    );
-    menu.popup({});
   }
 
   showDevModeMessages() {
@@ -403,11 +396,11 @@ export default class WindowEventHandler {
     if (!AppEnv.inDevMode()) {
       console.log(
         "%c Welcome to Mailspring! If you're exploring the source or building a " +
-        "plugin, you should enable debug flags. It's slower, but " +
-        'gives you better exceptions, the debug version of React, ' +
-        'and more. Choose %c Developer > Run with Debug Flags %c ' +
-        'from the menu. Also, check out http://Foundry376.github.io/Mailspring/ ' +
-        'for documentation and sample code!',
+          "plugin, you should enable debug flags. It's slower, but " +
+          'gives you better exceptions, the debug version of React, ' +
+          'and more. Choose %c Developer > Run with Debug Flags %c ' +
+          'from the menu. Also, check out http://Foundry376.github.io/Mailspring/ ' +
+          'for documentation and sample code!',
         'background-color: antiquewhite;',
         'background-color: antiquewhite; font-weight:bold;',
         'background-color: antiquewhite; font-weight:normal;'

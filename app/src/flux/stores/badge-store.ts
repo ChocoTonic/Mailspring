@@ -1,6 +1,7 @@
 /* eslint global-require:0 */
 import MailspringStore from 'mailspring-store';
 import FocusedPerspectiveStore from './focused-perspective-store';
+import { AccountStore } from './account-store';
 import ThreadCountsStore from './thread-counts-store';
 import CategoryStore from './category-store';
 
@@ -13,6 +14,9 @@ class BadgeStore extends MailspringStore {
 
     this.listenTo(FocusedPerspectiveStore, this._updateCounts);
     this.listenTo(ThreadCountsStore, this._updateCounts);
+    this.listenTo(AccountStore, this._updateCounts);
+
+    AppEnv.config.onDidChange('core.notifications.countBadgeAllAccounts', this._updateCounts);
 
     AppEnv.config.onDidChange('core.notifications.countBadge', ({ newValue }) => {
       if (newValue !== 'hide') {
@@ -38,7 +42,9 @@ class BadgeStore extends MailspringStore {
     let unread = 0;
     let total = 0;
 
-    const accountIds = FocusedPerspectiveStore.current().accountIds;
+    const accountIds = AppEnv.config.get('core.notifications.countBadgeAllAccounts')
+      ? AccountStore.accountIds()
+      : FocusedPerspectiveStore.current().accountIds;
     for (const cat of CategoryStore.getCategoriesWithRoles(accountIds, 'inbox')) {
       unread += ThreadCountsStore.unreadCountForCategoryId(cat.id);
       total += ThreadCountsStore.totalCountForCategoryId(cat.id);
@@ -72,8 +78,17 @@ class BadgeStore extends MailspringStore {
     }
   };
 
-  _setBadge = val => {
-    require('electron').ipcRenderer.send('set-badge-value', val);
+  _setBadge = (val: string) => {
+    const { ipcRenderer } = require('electron');
+    ipcRenderer.send('set-badge-value', val);
+
+    // On Windows, also update the taskbar overlay icon.
+    // Derive the count from val so it respects the badge preference
+    // (unread vs total vs hide), matching macOS/Linux behavior.
+    if (process.platform === 'win32') {
+      const count = val ? parseInt(val.replace('+', ''), 10) || 0 : 0;
+      ipcRenderer.send('set-overlay-icon', count);
+    }
   };
 }
 

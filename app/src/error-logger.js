@@ -9,7 +9,7 @@ if (process.type === 'renderer') {
 }
 
 var appVersion = app.getVersion();
-var RavenErrorReporter = require('./error-logger-extensions/raven-error-reporter');
+var SentryErrorReporter = require('./error-logger-extensions/sentry-error-reporter');
 
 // A globally available ErrorLogger that can report errors to various
 // sources and enhance error functionality.
@@ -40,7 +40,7 @@ module.exports = ErrorLogger = (function () {
     this._extendNativeConsole();
 
     this.extensions = [
-      new RavenErrorReporter({
+      new SentryErrorReporter({
         inSpecMode: args.inSpecMode,
         inDevMode: args.inDevMode,
         resourcePath: args.resourcePath,
@@ -60,8 +60,52 @@ module.exports = ErrorLogger = (function () {
     if (this.inSpecMode) {
       return;
     }
-    if (!error) {
-      error = { stack: '' };
+    // An error reported without a stack shows up in Sentry attributed to
+    // wherever `new Error()` happened to run to give it one — for JSON
+    // reparsed in the main process's `report-error` IPC handler (see
+    // application.ts), that's the same IPC handler frame for every caller,
+    // regardless of the error's real origin (window.onerror, uncaughtException,
+    // unhandledrejection forwarding a bare rejection reason, or an explicit
+    // reportError() call). Every stackless error, whatever its message,
+    // collapses into one unactionable Sentry issue. Wrap such inputs in a
+    // real Error *here*, in the renderer, before the IPC hop: since callers
+    // differ, this call site's stack differs too, so Sentry attributes and
+    // groups them separately going forward. Keep the original message when
+    // there is one — only the stack is synthetic.
+    var hasMessage =
+      error && typeof error.message === 'string' && error.message.length > 0;
+    var hasStack = error && typeof error.stack === 'string' && error.stack.length > 0;
+    if (!hasStack) {
+      var message;
+      if (hasMessage) {
+        message = error.message;
+      } else {
+        var description;
+        try {
+          description = JSON.stringify(error);
+        } catch (e) {
+          description = Object.prototype.toString.call(error);
+        }
+        message = 'Empty error reported (' + description + ')';
+      }
+      var wrapped = new Error(message);
+      if (error && typeof error === 'object') {
+        // Copy any other useful fields from the original, but never let a
+        // missing `stack` (or, when we just fell back to the description
+        // above, an empty `message`) on the input clobber the wrap's real
+        // values — that would defeat the whole purpose of wrapping.
+        try {
+          var keys = Object.getOwnPropertyNames(error);
+          for (var i = 0; i < keys.length; i++) {
+            var key = keys[i];
+            if (key === 'message' || key === 'stack') continue;
+            wrapped[key] = error[key];
+          }
+        } catch (e) {
+          // ignore non-assignable inputs
+        }
+      }
+      error = wrapped;
     }
     if (process.type === 'renderer') {
       var errorJSON = '{}';
@@ -96,7 +140,15 @@ module.exports = ErrorLogger = (function () {
     } else {
       this._notifyExtensions('reportError', error, extra);
     }
-    console.error(error, extra);
+    // console.error can itself throw (eg. EPIPE writing to a closed
+    // stdout/stderr pipe on Linux). Since reportError is called from our
+    // top-level uncaughtException handler, an uncaught throw here would
+    // re-enter that same handler and loop forever. Never let this fail.
+    try {
+      console.error(error, extra);
+    } catch (loggingError) {
+      // ignore
+    }
   };
 
   /////////////////////////////////////////////////////////////////////
@@ -117,7 +169,7 @@ module.exports = ErrorLogger = (function () {
         ver: appVersion,
         platform: process.platform,
       },
-    })
+    });
   };
 
   ErrorLogger.prototype._extendNativeConsole = function (args) {

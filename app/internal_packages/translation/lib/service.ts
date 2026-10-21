@@ -1,4 +1,4 @@
-import LRU from 'lru-cache';
+import { LRUCache } from 'lru-cache';
 import {
   QuotedHTMLTransformer,
   localized,
@@ -185,7 +185,7 @@ function forEachTranslatableText(doc: Document, callback: (el: Node, text: strin
 // We maintain a cache of blocks of text we've translated. Because the user may have a whole
 // mailbox of very similar or templated emails, this can cut down on the amount of text we
 // need to translate for a new email dramatically.
-const translatedSnippetCache = new LRU<string, string>({ max: 1000 });
+const translatedSnippetCache = new LRUCache<string, string>({ max: 1000 });
 let translatedSnippetLang = '';
 
 export async function translateMessageBody(
@@ -194,7 +194,7 @@ export async function translateMessageBody(
   silent = false
 ): Promise<string | false> {
   if (translatedSnippetLang !== targetLang) {
-    translatedSnippetCache.reset();
+    translatedSnippetCache.clear();
     translatedSnippetLang = targetLang;
   }
 
@@ -247,8 +247,10 @@ export async function translateMessageBody(
     } catch (error) {
       Actions.closePopover();
       if (!silent) {
-        const dialog = require('@electron/remote').dialog;
-        dialog.showErrorBox(localized('Language Conversion Failed'), error.toString());
+        AppEnv.showErrorDialog({
+          title: localized('Language Conversion Failed'),
+          message: error.toString(),
+        });
       }
       return false;
     }

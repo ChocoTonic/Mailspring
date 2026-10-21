@@ -2,11 +2,11 @@
 @import 'ui-mixins';
 
 .link-tracking-icon img.content-mask {
-  background-color: #aaa;
+  background-color: @text-color-subtle;
   vertical-align: text-bottom;
 }
 .link-tracking-icon img.content-mask.clicked {
-  background-color: #ccc;
+  background-color: @text-color-very-subtle;
 }
 .link-tracking-icon .link-click-count {
   display: inline-block;
@@ -51,7 +51,7 @@
     padding: @padding-base-vertical @padding-base-horizontal 0 @padding-base-horizontal;
     text-align: center;
     color: @text-color-subtle;
-    font-weight: 600;
+    font-weight: @font-weight-semi-bold;
   }
   .click-history-container {
     max-height: 112px;

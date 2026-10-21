@@ -10,8 +10,11 @@ import {
   AccountStore,
   DatabaseStore,
   AttachmentStore,
+  MailboxPerspective,
   SanitizeTransformer,
+  FocusedContentStore,
   InlineStyleTransformer,
+  FocusedPerspectiveStore,
 } from 'mailspring-exports';
 
 import DraftFactory from '../../src/flux/stores/draft-factory';
@@ -27,15 +30,15 @@ let account = null;
 const downloadData = {};
 
 const expectContactsEqual = (a, b) => {
-  expect(a.map(c => c.email).sort()).toEqual(b.map(c => c.email).sort());
+  expect(a.map((c) => c.email).sort()).toEqual(b.map((c) => c.email).sort());
 };
 
 describe('DraftFactory', function draftFactory() {
   beforeEach(() => {
     // Out of the scope of these specs
-    spyOn(InlineStyleTransformer, 'run').andCallFake(input => Promise.resolve(input));
-    spyOn(SanitizeTransformer, 'run').andCallFake(input => Promise.resolve(input));
-    spyOn(AttachmentStore, 'getDownloadDataForFile').andCallFake(fid => {
+    spyOn(InlineStyleTransformer, 'run').andCallFake((input) => Promise.resolve(input));
+    spyOn(SanitizeTransformer, 'run').andCallFake((input) => Promise.resolve(input));
+    spyOn(AttachmentStore, 'getDownloadDataForFile').andCallFake((fid) => {
       return downloadData[fid];
     });
 
@@ -44,7 +47,7 @@ describe('DraftFactory', function draftFactory() {
       new File({ filename: 'test.jpg', accountId: account.id, id: 'a' }),
       new File({ filename: 'test.pdj', accountId: account.id, id: 'b' }),
     ];
-    files.forEach(file => {
+    files.forEach((file) => {
       downloadData[file.id] = {
         fileId: file.id,
         filename: file.filename,
@@ -145,6 +148,28 @@ describe('DraftFactory', function draftFactory() {
   });
 
   describe('creating drafts', () => {
+    describe('createDraftForSendAgain', () => {
+      it('creates a new editable message with the original contents and recipients', () => {
+        spyOn(Actions, 'fetchFile');
+
+        waitsForPromise(() =>
+          DraftFactory.createDraftForSendAgain(fakeMessageWithFiles).then((draft) => {
+            expect(draft.threadId).toBeFalsy();
+            expect(draft.replyToHeaderMessageId).toBeFalsy();
+            expect(draft.forwardedHeaderMessageId).toBeFalsy();
+            expect(draft.subject).toBe(fakeMessageWithFiles.subject);
+            expect(draft.body).toBe(fakeMessageWithFiles.body);
+            expect(draft.to).toEqual(fakeMessageWithFiles.to);
+            expect(draft.cc).toEqual(fakeMessageWithFiles.cc);
+            expect(draft.bcc).toEqual(fakeMessageWithFiles.bcc);
+            expect(draft.from).toEqual(fakeMessageWithFiles.from);
+            expect(draft.files).toEqual(fakeMessageWithFiles.files);
+            expect(Actions.fetchFile).toHaveBeenCalled();
+          })
+        );
+      });
+    });
+
     describe('createDraftForReply', () => {
       it('should include a quoted text block', () => {
         waitsForPromise(() => {
@@ -152,7 +177,7 @@ describe('DraftFactory', function draftFactory() {
             thread: fakeThread,
             message: fakeMessage1,
             type: 'reply',
-          }).then(draft => {
+          }).then((draft) => {
             expect(draft.body.includes(`div class="gmail_quote`)).toBe(true);
           });
         });
@@ -164,7 +189,7 @@ describe('DraftFactory', function draftFactory() {
             thread: fakeThread,
             message: fakeMessage1,
             type: 'reply',
-          }).then(draft => {
+          }).then((draft) => {
             expect(draft.to).toEqual(fakeMessage1.from);
           });
         });
@@ -176,7 +201,7 @@ describe('DraftFactory', function draftFactory() {
             thread: fakeThread,
             message: fakeMessage1,
             type: 'reply',
-          }).then(draft => {
+          }).then((draft) => {
             expect(draft.replyToHeaderMessageId).toEqual(fakeMessage1.headerMessageId);
           });
         });
@@ -196,7 +221,7 @@ describe('DraftFactory', function draftFactory() {
             thread: fakeThread,
             message: fakeMessage1,
             type: 'reply',
-          }).then(draft => {
+          }).then((draft) => {
             expect(draft.accountId).toEqual(secondAccount.id);
             expect(draft.from[0].email).toEqual(secondAccount.defaultMe().email);
           });
@@ -215,7 +240,7 @@ describe('DraftFactory', function draftFactory() {
               thread: fakeThread,
               message: fakeMessage1,
               type: 'reply',
-            }).then(draft => {
+            }).then((draft) => {
               expect(draft.accountId).toEqual(TEST_ACCOUNT_ID);
               expect(draft.from[0].email).toEqual(TEST_ACCOUNT_ALIAS_EMAIL);
             });
@@ -236,7 +261,7 @@ describe('DraftFactory', function draftFactory() {
               thread: fakeThread,
               message: fakeMessage1,
               type: 'reply',
-            }).then(draft => {
+            }).then((draft) => {
               expect(draft.accountId).toEqual(TEST_ACCOUNT_ID);
               expect(draft.from[0].email).toEqual(TEST_ACCOUNT_ALIAS_EMAIL);
             });
@@ -251,7 +276,7 @@ describe('DraftFactory', function draftFactory() {
             thread: fakeThread,
             message: fakeMessage1,
             type: 'reply',
-          }).then(draft => {
+          }).then((draft) => {
             expect(draft.subject).toEqual('Re: OLD SUBJECT');
           });
         });
@@ -264,7 +289,7 @@ describe('DraftFactory', function draftFactory() {
             thread: fakeThread,
             message: fakeMessage1,
             type: 'reply',
-          }).then(draft => {
+          }).then((draft) => {
             expect(draft.subject).toEqual('Re: This is my DRAFT');
           });
         });
@@ -279,7 +304,7 @@ describe('DraftFactory', function draftFactory() {
               thread: fakeThread,
               message: msgWithReplyTo,
               type: 'reply',
-            }).then(draft => {
+            }).then((draft) => {
               expect(draft.to).toEqual(msgWithReplyTo.replyTo);
               expect(draft.cc.length).toBe(0);
               expect(draft.bcc.length).toBe(0);
@@ -293,7 +318,7 @@ describe('DraftFactory', function draftFactory() {
               thread: fakeThread,
               message: msgWithReplyToFromMe,
               type: 'reply',
-            }).then(draft => {
+            }).then((draft) => {
               expect(draft.to).toEqual(msgWithReplyToFromMe.replyTo);
               expect(draft.cc.length).toBe(0);
               expect(draft.bcc.length).toBe(0);
@@ -309,7 +334,7 @@ describe('DraftFactory', function draftFactory() {
               thread: fakeThread,
               message: msgFromMe,
               type: 'reply',
-            }).then(draft => {
+            }).then((draft) => {
               expect(draft.to).toEqual(msgFromMe.to);
               expect(draft.cc.length).toBe(0);
               expect(draft.bcc.length).toBe(0);
@@ -326,8 +351,8 @@ describe('DraftFactory', function draftFactory() {
             thread: fakeThread,
             message: fakeMessage1,
             type: 'reply-all',
-          }).then(draft => {
-            const ccEmails = draft.cc.map(cc => cc.email);
+          }).then((draft) => {
+            const ccEmails = draft.cc.map((cc) => cc.email);
             expect(ccEmails.sort()).toEqual([
               'ben@mailspring.com',
               'evan@mailspring.com',
@@ -343,7 +368,7 @@ describe('DraftFactory', function draftFactory() {
             thread: fakeThread,
             message: fakeMessage1,
             type: 'reply-all',
-          }).then(draft => {
+          }).then((draft) => {
             expect(draft.bcc).toEqual([]);
             expect(draft.cc.indexOf(fakeMessage1.bcc[0])).toEqual(-1);
           });
@@ -356,8 +381,8 @@ describe('DraftFactory', function draftFactory() {
             thread: fakeThread,
             message: fakeMessage1,
             type: 'reply-all',
-          }).then(draft => {
-            const ccEmails = draft.cc.map(cc => cc.email);
+          }).then((draft) => {
+            const ccEmails = draft.cc.map((cc) => cc.email);
             expect(ccEmails.indexOf(account.me().email)).toEqual(-1);
           });
         });
@@ -370,7 +395,7 @@ describe('DraftFactory', function draftFactory() {
               thread: fakeThread,
               message: msgWithReplyTo,
               type: 'reply-all',
-            }).then(draft => {
+            }).then((draft) => {
               expect(draft.to).toEqual(msgWithReplyTo.replyTo);
             });
           });
@@ -382,7 +407,7 @@ describe('DraftFactory', function draftFactory() {
               thread: fakeThread,
               message: msgWithReplyToFromMe,
               type: 'reply-all',
-            }).then(draft => {
+            }).then((draft) => {
               expect(draft.to).toEqual(msgWithReplyToFromMe.replyTo);
             });
           });
@@ -394,9 +419,9 @@ describe('DraftFactory', function draftFactory() {
               thread: fakeThread,
               message: msgWithReplyTo,
               type: 'reply-all',
-            }).then(draft => {
+            }).then((draft) => {
               const all = [...draft.to, ...draft.cc, ...draft.bcc];
-              const match = _.find(all, c => c.email === msgWithReplyTo.from[0].email);
+              const match = _.find(all, (c) => c.email === msgWithReplyTo.from[0].email);
               expect(match).toEqual(undefined);
             });
           });
@@ -410,10 +435,10 @@ describe('DraftFactory', function draftFactory() {
               thread: fakeThread,
               message: msgWithReplyToDuplicates,
               type: 'reply-all',
-            }).then(draft => {
-              const ccEmails = draft.cc.map(cc => cc.email);
+            }).then((draft) => {
+              const ccEmails = draft.cc.map((cc) => cc.email);
               expect(ccEmails.sort()).toEqual(['1@1.com', '2@2.com', '4@4.com']);
-              const toEmails = draft.to.map(to => to.email);
+              const toEmails = draft.to.map((to) => to.email);
               expect(toEmails.sort()).toEqual(['reply-to@5.com']);
             });
           });
@@ -427,7 +452,7 @@ describe('DraftFactory', function draftFactory() {
               thread: fakeThread,
               message: msgFromMe,
               type: 'reply-all',
-            }).then(draft => {
+            }).then((draft) => {
               expect(draft.to).toEqual(msgFromMe.to);
               expect(draft.cc).toEqual(msgFromMe.cc);
               expect(draft.bcc.length).toBe(0);
@@ -443,7 +468,7 @@ describe('DraftFactory', function draftFactory() {
           return DraftFactory.createDraftForForward({
             thread: fakeThread,
             message: fakeMessage1,
-          }).then(draft => {
+          }).then((draft) => {
             this.model = draft;
           });
         });
@@ -491,7 +516,7 @@ describe('DraftFactory', function draftFactory() {
           return DraftFactory.createDraftForForward({
             thread: fakeThread,
             message: fakeMessageWithFiles,
-          }).then(draft => {
+          }).then((draft) => {
             expect(draft.files.length).toBe(2);
             expect(draft.files[0].filename).toBe('test.jpg');
             expect(draft.files[1].filename).toBe('test.pdj');
@@ -505,7 +530,7 @@ describe('DraftFactory', function draftFactory() {
           return DraftFactory.createDraftForForward({
             thread: fakeThread,
             message: fakeMessage1,
-          }).then(draft => {
+          }).then((draft) => {
             expect(draft.subject).toEqual('Fwd: OLD SUBJECT');
           });
         });
@@ -517,7 +542,7 @@ describe('DraftFactory', function draftFactory() {
           return DraftFactory.createDraftForForward({
             thread: fakeThread,
             message: fakeMessage1,
-          }).then(draft => {
+          }).then((draft) => {
             expect(draft.subject).toEqual('Fwd: This is my DRAFT');
           });
         });
@@ -716,7 +741,7 @@ describe('DraftFactory', function draftFactory() {
       it('works for lowercase', () => {
         waitsForPromise(() => {
           return DraftFactory.createDraftForMailto(`mailto:asdf@asdf.com?subject=${expected}`).then(
-            draft => {
+            (draft) => {
               expect(draft.subject).toBe(expected);
             }
           );
@@ -726,7 +751,7 @@ describe('DraftFactory', function draftFactory() {
       it('works for title case', () => {
         waitsForPromise(() => {
           return DraftFactory.createDraftForMailto(`mailto:asdf@asdf.com?Subject=${expected}`).then(
-            draft => {
+            (draft) => {
               expect(draft.subject).toBe(expected);
             }
           );
@@ -736,13 +761,13 @@ describe('DraftFactory', function draftFactory() {
       it('works for uppercase', () => {
         waitsForPromise(() => {
           return DraftFactory.createDraftForMailto(`mailto:asdf@asdf.com?SUBJECT=${expected}`).then(
-            draft => {
+            (draft) => {
               expect(draft.subject).toBe(expected);
             }
           );
         });
       });
-      ['mailto', 'mail', ''].forEach(url => {
+      ['mailto', 'mail', ''].forEach((url) => {
         it(`rejects gracefully on super mangled mailto link: ${url}`, () => {
           waitsForPromise(() => {
             return DraftFactory.createDraftForMailto(url)
@@ -778,7 +803,7 @@ describe('DraftFactory', function draftFactory() {
         'mailto:?subject=Issues%20%C2%B7%20atom/electron%20%C2%B7%20GitHub&body=https://github.com/atom/electron/issues?utf8=&q=is%253Aissue+is%253Aopen+123%0A%0A',
       ];
       const expected = [
-        new Message(),
+        new Message({} as any),
         new Message({
           to: [new Contact({ name: 'bengotow@gmail.com', email: 'bengotow@gmail.com' })],
         }),
@@ -864,21 +889,20 @@ describe('DraftFactory', function draftFactory() {
         new Message({
           to: [],
           subject: 'Issues · atom/electron · GitHub',
-          body:
-            'https://github.com/atom/electron/issues?utf8=&q=is%3Aissue+is%3Aopen+123<br/><br/>',
+          body: 'https://github.com/atom/electron/issues?utf8=&q=is%3Aissue+is%3Aopen+123<br/><br/>',
         }),
       ];
 
       links.forEach((link, idx) => {
         it(`works for ${link}`, () => {
           waitsForPromise(() => {
-            return DraftFactory.createDraftForMailto(link).then(draft => {
+            return DraftFactory.createDraftForMailto(link).then((draft) => {
               const expectedDraft = expected[idx];
               expect(draft.subject).toEqual(expectedDraft.subject);
               if (expectedDraft.body) {
                 expect(draft.body).toEqual(expectedDraft.body);
               }
-              ['to', 'cc', 'bcc'].forEach(attr => {
+              ['to', 'cc', 'bcc'].forEach((attr) => {
                 expectedDraft[attr].forEach((expectedContact, jdx) => {
                   const actual = draft[attr][jdx];
                   expect(actual instanceof Contact).toBe(true);
@@ -890,6 +914,95 @@ describe('DraftFactory', function draftFactory() {
           });
         });
       });
+    });
+  });
+
+  // `_current` is typed as EmptyMailboxPerspective from its initializer; `_setPerspective` is
+  // the untyped production path, so cast rather than widen to `any`.
+  function setFocusedPerspective(perspective: MailboxPerspective) {
+    const store = FocusedPerspectiveStore as unknown as { _current: MailboxPerspective };
+    store._current = perspective;
+  }
+
+  describe('_accountForNewDraft', () => {
+    let secondAccount = null;
+
+    beforeEach(() => {
+      secondAccount = AccountStore.accounts()[1];
+    });
+
+    afterEach(() => {
+      // master-before-each never resets FocusedContentStore; keep thread focus from leaking.
+      FocusedContentStore._focused = {};
+      FocusedContentStore._keyboardCursor = {};
+    });
+
+    it('uses the perspective account when the perspective is single-account, ignoring any focused thread from another account', async () => {
+      const otherAccountThread = new Thread({
+        id: 'other-account-thread-id',
+        accountId: secondAccount.id,
+        subject: 'Other Account Thread',
+      });
+      setFocusedPerspective(new MailboxPerspective([account.id]));
+      Actions.setFocus({ collection: 'thread', item: otherAccountThread });
+
+      const draft = await DraftFactory.createDraft();
+      expect(draft.accountId).toEqual(account.id);
+      expect(draft.from[0].email).toEqual(account.defaultMe().email);
+    });
+
+    it("falls back to the perspective's first account when the perspective is multi-account and no thread is focused", async () => {
+      setFocusedPerspective(new MailboxPerspective([account.id, secondAccount.id]));
+
+      const draft = await DraftFactory.createDraft();
+      expect(draft.accountId).toEqual(account.id);
+      expect(draft.from[0].email).toEqual(account.defaultMe().email);
+    });
+
+    it('prefers the focused thread account over the perspective order when the perspective is multi-account', async () => {
+      const secondAccountThread = new Thread({
+        id: 'second-account-thread-id',
+        accountId: secondAccount.id,
+        subject: 'Second Account Thread',
+      });
+      setFocusedPerspective(new MailboxPerspective([account.id, secondAccount.id]));
+      Actions.setFocus({ collection: 'thread', item: secondAccountThread });
+
+      const draft = await DraftFactory.createDraft();
+      expect(draft.accountId).toEqual(secondAccount.id);
+      expect(draft.from[0].email).toEqual(secondAccount.defaultMe().email);
+    });
+
+    it('prefers the focused thread account regardless of account ordering in the perspective (mirror case)', async () => {
+      setFocusedPerspective(new MailboxPerspective([secondAccount.id, account.id]));
+      Actions.setFocus({ collection: 'thread', item: fakeThread });
+
+      const draft = await DraftFactory.createDraft();
+      expect(draft.accountId).toEqual(account.id);
+      expect(draft.from[0].email).toEqual(account.defaultMe().email);
+    });
+
+    it("falls back to the perspective's first account, without throwing, when the focused thread's account is not in the perspective", async () => {
+      const staleThread = new Thread({
+        id: 'stale-cross-account-thread-id',
+        accountId: 'account-id-not-in-perspective',
+        subject: 'Stale Cross-Account Thread',
+      });
+      setFocusedPerspective(new MailboxPerspective([account.id, secondAccount.id]));
+      Actions.setFocus({ collection: 'thread', item: staleThread });
+
+      const draft = await DraftFactory.createDraft();
+      expect(draft.accountId).toEqual(account.id);
+      expect(draft.from[0].email).toEqual(account.defaultMe().email);
+    });
+
+    it('always uses the pinned core.sending.defaultAccountIdForSend account, regardless of perspective or focused thread', async () => {
+      AppEnv.config.set('core.sending.defaultAccountIdForSend', secondAccount.id);
+      setFocusedPerspective(new MailboxPerspective([account.id]));
+
+      const draft = await DraftFactory.createDraft();
+      expect(draft.accountId).toEqual(secondAccount.id);
+      expect(draft.from[0].email).toEqual(secondAccount.defaultMe().email);
     });
   });
 });

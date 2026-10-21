@@ -52,8 +52,8 @@
     background: @input-bg;
     border-bottom-left-radius: @border-radius-base;
     border-bottom-right-radius: @border-radius-base;
-    box-shadow: 0 0.5px 0 rgba(0, 0, 0, 0.15), 0 -0.5px 0 rgba(0, 0, 0, 0.15),
-      0.5px 0 0 rgba(0, 0, 0, 0.15), -0.5px 0 0 rgba(0, 0, 0, 0.15), 0 4px 7px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 0.5px 0 @btn-border-color, 0 -0.5px 0 @btn-border-color,
+      0.5px 0 0 @btn-border-color, -0.5px 0 0 @btn-border-color, 0 4px 7px @standard-shadow-color;
 
     padding-top: @padding-small-vertical;
 
@@ -123,5 +123,22 @@
       caret-color: @text-color;
       color: transparent;
     }
+  }
+}
+
+// The macOS 26+ toolbar is taller and uses a capsule-shaped search field.
+:where(body.platform-darwin) .thread-search-bar {
+  height: @toolbar-btn-height-darwin;
+  line-height: @toolbar-btn-height-darwin;
+  margin-top: ((@toolbar-height-darwin - @toolbar-btn-height-darwin) / 2);
+  padding-left: @padding-base-horizontal;
+  padding-right: @padding-base-horizontal;
+  border-radius: (@toolbar-btn-height-darwin / 2);
+  &:focus {
+    border-radius: (@toolbar-btn-height-darwin / 2);
+  }
+  .suggestions {
+    top: (@toolbar-btn-height-darwin + 4px);
+    border-radius: @border-radius-large;
   }
 }

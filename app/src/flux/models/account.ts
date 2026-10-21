@@ -1,6 +1,7 @@
 /* eslint global-require:0 */
 import * as Attributes from '../attributes';
 import { ModelWithMetadata } from './model-with-metadata';
+import { AttributeValues } from './model';
 import { MailsyncProcessExit } from 'mailspring-exports';
 
 let CategoryStore = null;
@@ -116,7 +117,7 @@ export class Account extends ModelWithMetadata {
   public syncError: MailsyncProcessExit | null;
   public color: string;
 
-  constructor(args) {
+  constructor(args: AttributeValues<typeof Account.attributes>) {
     super(args);
     this.aliases = this.aliases || [];
     this.label = this.label || this.emailAddress;
@@ -136,7 +137,7 @@ export class Account extends ModelWithMetadata {
     return json;
   }
 
-  fromJSON(json) {
+  fromJSON(json: any) {
     super.fromJSON(json);
     if (!this.label) {
       this.label = this.emailAddress;
@@ -157,15 +158,26 @@ export class Account extends ModelWithMetadata {
     });
   }
 
-  meUsingAlias(alias) {
+  meUsingAlias(alias: string) {
     Contact = Contact || require('./contact').Contact;
 
     if (!alias) {
       return this.me();
     }
-    return Contact.fromString(alias, {
+    const contact = Contact.fromString(alias, {
       accountId: this.id,
     });
+
+    // Aliases are user-provided and may not contain an email address at all
+    // (eg: legacy or hand-edited data.) Treat the alias as a display name over
+    // the account's own address - which is what the preferences UI saves for
+    // the same input - rather than returning a contact that can't send mail.
+    if (!contact.email) {
+      contact.email = this.emailAddress;
+      contact.name = contact.name || this.name;
+      contact.id = `local-${this.id}-${this.emailAddress}`;
+    }
+    return contact;
   }
 
   defaultMe() {
@@ -179,6 +191,10 @@ export class Account extends ModelWithMetadata {
     return this.provider === 'gmail';
   }
 
+  usesOAuth() {
+    return ['gmail', 'office365', 'outlook'].includes(this.provider);
+  }
+
   // Public: Returns the localized, properly capitalized provider name,
   // like Gmail, Exchange, or Outlook 365
   displayProvider() {
@@ -190,8 +206,12 @@ export class Account extends ModelWithMetadata {
       return 'Yahoo';
     } else if (this.provider === 'imap') {
       return 'IMAP';
+    } else if (this.provider === 'yandex') {
+      return 'Yandex';
     } else if (this.provider === 'office365') {
       return 'Office 365';
+    } else if (this.provider === 'outlook') {
+      return 'Outlook';
     }
     return this.provider;
   }

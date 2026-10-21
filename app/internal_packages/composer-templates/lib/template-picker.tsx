@@ -1,16 +1,11 @@
-/* eslint jsx-a11y/tabindex-no-positive: 0 */
 import React from 'react';
 import ReactDOM from 'react-dom';
-import { localized, PropTypes, Actions, Message } from 'mailspring-exports';
+import { localized, Actions, Message } from 'mailspring-exports';
 import { Menu, RetinaImg } from 'mailspring-component-kit';
 import TemplateStore from './template-store';
 
 class TemplatePopover extends React.Component<{ headerMessageId: string }> {
   static displayName = 'TemplatePopover';
-
-  static propTypes = {
-    headerMessageId: PropTypes.string,
-  };
 
   unsubscribe?: () => void;
 
@@ -38,16 +33,21 @@ class TemplatePopover extends React.Component<{ headerMessageId: string }> {
       return templates;
     }
 
-    return templates.filter(t => {
-      return t.name.toLowerCase().indexOf(searchValue.toLowerCase()) === 0;
+    // Match both lines shown in each item the same way, so typing a word from
+    // the middle of a name finds it just like a word from the middle of a subject.
+    const query = searchValue.toLowerCase();
+    return templates.filter((t) => {
+      return (
+        t.name.toLowerCase().includes(query) || (t.subject || '').toLowerCase().includes(query)
+      );
     });
   }
 
-  _onSearchValueChange = event => {
+  _onSearchValueChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     this.setState({ searchValue: event.target.value });
   };
 
-  _onChooseTemplate = template => {
+  _onChooseTemplate = (template: ReturnType<typeof TemplateStore.items>[0]) => {
     Actions.insertTemplateId({
       templateId: template.id,
       headerMessageId: this.props.headerMessageId,
@@ -69,7 +69,7 @@ class TemplatePopover extends React.Component<{ headerMessageId: string }> {
     const headerComponents = [
       <input
         type="text"
-        tabIndex={1}
+        autoFocus
         key="textfield"
         className="search"
         value={this.state.searchValue}
@@ -93,8 +93,13 @@ class TemplatePopover extends React.Component<{ headerMessageId: string }> {
         headerComponents={headerComponents}
         footerComponents={footerComponents}
         items={filteredTemplates}
-        itemKey={item => item.id}
-        itemContent={item => item.name}
+        itemKey={(item) => item.id}
+        itemContent={(item) => (
+          <div className="template">
+            <div className="name">{item.name}</div>
+            {item.subject ? <div className="subject">{item.subject}</div> : null}
+          </div>
+        )}
         onSelect={this._onChooseTemplate}
       />
     );
@@ -106,10 +111,6 @@ class TemplatePicker extends React.Component<{
   draft: Message;
 }> {
   static displayName = 'TemplatePicker';
-
-  static propTypes = {
-    headerMessageId: PropTypes.string,
-  };
 
   _onClickButton = () => {
     const buttonRect = (ReactDOM.findDOMNode(this) as HTMLElement).getBoundingClientRect();
@@ -129,13 +130,19 @@ class TemplatePicker extends React.Component<{
         className="btn btn-toolbar btn-templates narrow pull-right"
         onClick={this._onClickButton}
         title={localized('Quick Reply')}
+        aria-label={localized('Quick Reply')}
       >
         <RetinaImg
           url="mailspring://composer-templates/assets/icon-composer-templates@2x.png"
           mode={RetinaImg.Mode.ContentIsMask}
+          aria-hidden="true"
         />
         &nbsp;
-        <RetinaImg name="icon-composer-dropdown.png" mode={RetinaImg.Mode.ContentIsMask} />
+        <RetinaImg
+          name="icon-composer-dropdown.png"
+          mode={RetinaImg.Mode.ContentIsMask}
+          aria-hidden="true"
+        />
       </button>
     );
   }

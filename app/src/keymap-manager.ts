@@ -1,4 +1,4 @@
-import fs from 'fs-plus';
+import fs from 'fs';
 import path from 'path';
 import mousetrap from 'mousetrap';
 import { ipcRenderer } from 'electron';
@@ -7,21 +7,43 @@ import { Emitter, Disposable } from 'event-kit';
 let suspended = false;
 const templateConfigKey = 'core.keymapTemplate';
 
+// Bindings are resolved base → template → package regardless of the order the
+// files were loaded in. Base files layer additively. A template (Gmail, Outlook,
+// ...) replaces the base bindings of each command it defines, which is what lets
+// Outlook free ctrl+q from application:quit on Windows; the cost is that a
+// template must restate every base keystroke it wants to keep (up/down
+// alongside j/k, enter alongside o, ...), and keymap-templates-spec fails if one
+// is dropped without being listed there as intentional. Package keymaps are
+// added on top so a template can't strip mod+enter from composer:send-message.
+type KeymapLayer = 'base' | 'template' | 'package';
+const layerOrder: KeymapLayer[] = ['base', 'template', 'package'];
+
+interface KeymapLoadOptions {
+  layer?: KeymapLayer;
+}
+
+// Mousetrap understands mod, but keeps mod+u and ctrl+u as separate callbacks.
+// Our stopCallback skips the second after the first stops propagation, so merge
+// platform aliases before registering callbacks and collecting their commands.
+const normalizePlatformKeystrokes = (keystrokes: string) =>
+  keystrokes.replace(/\bmod\b/g, process.platform === 'darwin' ? 'command' : 'ctrl');
+
 /*
 By default, Mousetrap stops all hotkeys within text inputs. Override this to
 more specifically block only hotkeys that have no modifier keys (things like
 Gmail's "x", while allowing standard hotkeys.)
 */
-mousetrap.prototype.stopCallback = (e, element, combo) => {
+mousetrap.prototype.stopCallback = (e: KeyboardEvent, element: HTMLElement, combo: string) => {
   if (suspended) {
     return true;
   }
 
   // Slate handles undo/redo itself in slate-react's `after` plugin but doesn't stop
   // propagation. Because of this, we need to make sure we do not fire core:undo or core:redo.
+  const target = e.target as HTMLElement;
   const withinSlateEditor =
-    e.target.isContentEditable &&
-    (e.target.hasAttribute('data-slate-editor') || e.target.closest('[data-slate-editor]'));
+    target.isContentEditable &&
+    (target.hasAttribute('data-slate-editor') || target.closest('[data-slate-editor]'));
   if (withinSlateEditor && /(mod|command|ctrl)\+(z|y)/.test(combo)) {
     return true;
   }
@@ -31,15 +53,37 @@ mousetrap.prototype.stopCallback = (e, element, combo) => {
     return true;
   }
 
+  if ((e as any).isPropagationStopped()) {
+    return true;
+  }
+  // Also treat anything inside an open composer as text input so that focus
+  // landing on composer chrome (footer, attachment area, between recipient
+  // chips, etc.) doesn't let plain keys fall through to global shortcuts.
   const withinTextInput =
     element.tagName === 'INPUT' ||
     element.tagName === 'SELECT' ||
     element.tagName === 'TEXTAREA' ||
-    element.isContentEditable;
+    element.isContentEditable ||
+    !!element.closest('.composer-outer-wrap');
   if (withinTextInput) {
     const isPlainKey = !/(mod|command|ctrl)/.test(combo);
-    const isReservedTextEditingShortcut = /(mod|command|ctrl)\+(a|x|c|v)/.test(combo);
-    return isPlainKey || isReservedTextEditingShortcut;
+    const isReservedTextEditingShortcut = /(mod|command|ctrl)\+(a|x|c|v|left|right)/.test(combo);
+    if (isPlainKey || isReservedTextEditingShortcut) {
+      return true;
+    }
+  }
+
+  // Stop mousetrap from firing global commands when focus is within a tree widget
+  // (e.g. the mailbox outline view), so the tree's own arrow-key navigation works.
+  // withinTextInput runs first so that typing in an inline composer inside the tree
+  // is handled correctly before we apply tree-specific logic.
+  const withinTree =
+    !!element.closest('[role="tree"]') ||
+    !!element.closest('[data-usesarrowkeys]:has(:focus-visible)');
+  if (withinTree) {
+    const isPlainKey = !/(mod|command|ctrl)/.test(combo);
+    const isArrowKey = /(left|right|up|down)/.test(combo);
+    return isPlainKey && isArrowKey;
   }
   return false;
 };
@@ -49,10 +93,16 @@ class KeymapFile {
   _disposable = null;
   _path: string;
   _manager: KeymapManager;
+  _layer: KeymapLayer;
 
-  constructor(manager, filePath) {
+  constructor(
+    manager: KeymapManager,
+    filePath: string,
+    { layer = 'package' }: KeymapLoadOptions = {}
+  ) {
     this._manager = manager;
     this._path = filePath;
+    this._layer = layer;
   }
 
   load = () => {
@@ -68,14 +118,15 @@ class KeymapFile {
     }
 
     this._bindings = {};
-    Object.keys(keymaps).forEach(command => {
+    Object.keys(keymaps).forEach((command) => {
       let keystrokesArray = keymaps[command];
       if (!(keystrokesArray instanceof Array)) {
         keystrokesArray = [keystrokesArray];
       }
+      // An empty list is a command with no keys, which overrides the layers below it.
+      this._bindings[command] = [];
       for (const keystrokes of keystrokesArray) {
         this._manager.ensureKeystrokesRegistered(keystrokes);
-        this._bindings[command] = this._bindings[command] || [];
         this._bindings[command].push(keystrokes);
       }
     });
@@ -93,6 +144,10 @@ class KeymapFile {
 
   bindings() {
     return this._bindings;
+  }
+
+  layer() {
+    return this._layer;
   }
 }
 
@@ -165,8 +220,10 @@ export default class KeymapManager {
 
   loadKeymaps = () => {
     // Load the base keymap and the base.platform keymap
-    this.loadKeymap(path.join(this.resourcePath, 'keymaps', 'base.json'));
-    this.loadKeymap(path.join(this.resourcePath, 'keymaps', `base-${process.platform}.json`));
+    this.loadKeymap(path.join(this.resourcePath, 'keymaps', 'base.json'), { layer: 'base' });
+    this.loadKeymap(path.join(this.resourcePath, 'keymaps', `base-${process.platform}.json`), {
+      layer: 'base',
+    });
 
     // Load the template keymap (Gmail, Mail.app, etc.) the user has chosen
     if (this._unobserveTemplate) {
@@ -196,29 +253,35 @@ export default class KeymapManager {
         'templates',
         `${templateFile}.json`
       );
-      this._removeTemplate = this.loadKeymap(templateKeymapPath);
+      this._removeTemplate = this.loadKeymap(templateKeymapPath, { layer: 'template' });
     }
   };
 
-  loadKeymap(filePath) {
-    const file = new KeymapFile(this, filePath);
+  loadKeymap(filePath: string, { layer = 'package' }: KeymapLoadOptions = {}) {
+    const file = new KeymapFile(this, filePath, { layer });
     this._files.push(file);
     file.load();
 
     return new Disposable(() => {
-      this._files = this._files.filter(f => f !== file);
+      this._files = this._files.filter((f) => f !== file);
       this.keymapCacheInvalidated();
     });
   }
 
-  ensureKeystrokesRegistered(keystrokes) {
-    if (this._registered[keystrokes]) {
+  ensureKeystrokesRegistered(keystrokes: string) {
+    const platformKeystrokes = normalizePlatformKeystrokes(keystrokes);
+    if (this._registered[platformKeystrokes]) {
       return;
     }
-    this._registered[keystrokes] = true;
+    this._registered[platformKeystrokes] = true;
 
-    mousetrap.bind(keystrokes, () => {
-      for (const command of this._commandsCache[keystrokes] || []) {
+    mousetrap.bind(platformKeystrokes, () => {
+      const commands = this._commandsCache[platformKeystrokes] || [];
+      if (commands.length === 0) {
+        return;
+      }
+
+      for (const command of commands) {
         if (command.startsWith('application:')) {
           ipcRenderer.send('command', command);
         } else {
@@ -232,11 +295,18 @@ export default class KeymapManager {
   keymapCacheInvalidated() {
     this._bindingsCache = {};
 
-    for (const file of this._files) {
+    const files = layerOrder.flatMap((layer) => this._files.filter((f) => f.layer() === layer));
+    for (const file of files) {
       const fileBindings = file.bindings();
       for (const command of Object.keys(fileBindings)) {
         const keystrokesArray = fileBindings[command];
-        this._bindingsCache[command] = (this._bindingsCache[command] || []).concat(keystrokesArray);
+        if (file.layer() === 'template') {
+          this._bindingsCache[command] = keystrokesArray.slice();
+        } else {
+          this._bindingsCache[command] = (this._bindingsCache[command] || []).concat(
+            keystrokesArray
+          );
+        }
       }
     }
     if (this.userKeymap) {
@@ -249,11 +319,12 @@ export default class KeymapManager {
     this._commandsCache = {};
     for (const command of Object.keys(this._bindingsCache)) {
       for (const keystrokes of this._bindingsCache[command]) {
-        if (!this._commandsCache[keystrokes]) {
-          this._commandsCache[keystrokes] = [];
+        const platformKeystrokes = normalizePlatformKeystrokes(keystrokes);
+        if (!this._commandsCache[platformKeystrokes]) {
+          this._commandsCache[platformKeystrokes] = [];
         }
-        if (!this._commandsCache[keystrokes].includes(command)) {
-          this._commandsCache[keystrokes].push(command);
+        if (!this._commandsCache[platformKeystrokes].includes(command)) {
+          this._commandsCache[platformKeystrokes].push(command);
         }
       }
     }
@@ -261,7 +332,7 @@ export default class KeymapManager {
     this._emitter.emit('on-did-reload-keymap');
   }
 
-  onDidReloadKeymap = callback => {
+  onDidReloadKeymap = (callback: () => void) => {
     return this._emitter.on('on-did-reload-keymap', callback);
   };
 
@@ -269,7 +340,7 @@ export default class KeymapManager {
     return this._bindingsCache;
   }
 
-  getBindingsForCommand(command) {
+  getBindingsForCommand(command: string) {
     return this._bindingsCache[command] || [];
   }
 }

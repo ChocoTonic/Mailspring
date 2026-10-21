@@ -2,18 +2,23 @@ import fs from 'fs';
 import path from 'path';
 import QuotedHTMLTransformer from '../../src/services/quoted-html-transformer';
 
-describe('QuotedHTMLTransformer', function() {
-  const readFile = function(fname) {
+describe('QuotedHTMLTransformer', function () {
+  const readFile = function (fname) {
     const emailPath = path.resolve(__dirname, '..', 'fixtures', 'emails', fname);
     return fs.readFileSync(emailPath, 'utf8');
   };
 
-  const removeQuotedHTML = function(fname, opts = {}) {
-    return QuotedHTMLTransformer.removeQuotedHTML(readFile(fname), opts);
+  const removeQuotedHTML = function (fname, opts: { keepIfWholeBodyIsQuote?: boolean } = {}) {
+    return QuotedHTMLTransformer.removeQuotedHTML(
+      readFile(fname),
+      opts as {
+        keepIfWholeBodyIsQuote: boolean;
+      }
+    );
   };
 
-  for (let n = 1; n <= 28; n++) {
-    it(`properly parses email_${n}`, function() {
+  for (let n = 1; n <= 29; n++) {
+    it(`properly parses email_${n}`, function () {
       const opts = { keepIfWholeBodyIsQuote: true };
       const actual = removeQuotedHTML(`email_${n}.html`, opts).trim();
       const expected = readFile(`email_${n}_stripped.html`).trim();
@@ -27,8 +32,8 @@ describe('QuotedHTMLTransformer', function() {
     });
   }
 
-  describe('manual quote detection tests', function() {
-    const clean = str => str.replace(/[\n\r]/g, '').replace(/\s{2,}/g, ' ');
+  describe('manual quote detection tests', function () {
+    const clean = (str) => str.replace(/[\n\r]/g, '').replace(/\s{2,}/g, ' ');
 
     // The key is the inHTML. The value is the outHTML
     const tests = [];
@@ -298,7 +303,7 @@ Hey
   First Middle Last-Last
   <span dir="ltr">
     &lt;
-    <a href="mailto:test@mailspring.com" target="_blank">
+    <a href="mailto:test@mailspring.com" target="_blank" rel="noopener noreferrer">
       test@mailspring.com
     </a>
     &gt;
@@ -355,19 +360,26 @@ On Thu, Mar 3, 2016 I went to my writing club and wrote:
         return result;
       })());
 
-    it('removes all trailing <br> tags', function() {
+    it('removes all trailing <br> tags', function () {
       const input0 = 'hello world<br><br><blockquote>foolololol</blockquote>';
       const expect0 = 'hello world';
       expect(QuotedHTMLTransformer.removeQuotedHTML(input0)).toEqual(expect0);
     });
 
-    it('preserves <br> tags in the middle and only chops off tail', function() {
+    it('preserves <br> tags in the middle and only chops off tail', function () {
       const input0 = 'hello<br><br>world<br><br><blockquote>foolololol</blockquote>';
       const expect0 = 'hello<br><br>world';
       expect(QuotedHTMLTransformer.removeQuotedHTML(input0)).toEqual(expect0);
     });
 
-    it('works as expected when body tag inside the html', function() {
+    it('keeps body content that Gmail placed inside div.gmail_signature', function () {
+      const input = `<div dir="ltr"><div>Hi Alex</div><div><br></div><div>Here is the link to the files.</div><div><div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature"><div dir="ltr"><div><br></div><div><a href="https://example.com/files">FILES</a></div><div><br></div><span>Thanks and have a great day</span><br><br><table><tbody><tr><td><p><b>Jane Doe</b></p></td></tr></tbody></table></div></div></div></div>`;
+      const output = QuotedHTMLTransformer.removeQuotedHTML(input);
+      expect(output).toContain('FILES');
+      expect(output).toContain('Thanks and have a great day');
+    });
+
+    it('works as expected when body tag inside the html', function () {
       const input0 = `\
 <br><br><blockquote class="gmail_quote"
   style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex;">
@@ -401,7 +413,7 @@ On Thu, Mar 3, 2016 I went to my writing club and wrote:
   // `QuotedHTMLTransformer` needs Electron booted up in order to work because
   // of the DOMParser.
   xit('Run this simple function to generate output files', () =>
-    [18, 20].forEach(function(n) {
+    [18, 20].forEach(function (n) {
       const newHTML = QuotedHTMLTransformer.removeQuotedHTML(readFile(`email_${n}.html`));
       const outPath = path.resolve(
         __dirname,

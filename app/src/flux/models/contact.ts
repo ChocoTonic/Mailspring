@@ -1,5 +1,5 @@
 /* eslint global-require: 0 */
-import _str from 'underscore.string';
+import _str from '../../string-utils';
 import { Model, AttributeValues } from './model';
 import * as Attributes from '../attributes';
 import * as Utils from './utils';
@@ -55,7 +55,7 @@ export interface ContactInfoGoogle {
       };
       person: string;
       type: string;
-    }
+    },
   ];
   emailAddresses?: {
     metadata: {
@@ -97,6 +97,13 @@ export interface ContactInfoGoogle {
       primary: boolean;
     };
     type: string;
+    value: string;
+  }[];
+  biographies?: {
+    contentType: string;
+    metadata: {
+      primary: boolean;
+    };
     value: string;
   }[];
 }
@@ -252,7 +259,7 @@ const nameSuffixes = {};
   'trustees of',
   'vadm',
   'vice admiral',
-].forEach(prefix => {
+].forEach((prefix) => {
   namePrefixes[prefix] = true;
 });
 
@@ -329,7 +336,7 @@ const nameSuffixes = {};
   'usn ret',
   'usn us navy',
   'vm',
-].forEach(suffix => {
+].forEach((suffix) => {
   nameSuffixes[suffix] = true;
 });
 
@@ -405,24 +412,43 @@ export class Contact extends Model {
     return Contact.sortOrderAttribute().descending();
   };
 
-  static fromString(string, { accountId }: { accountId?: string } = {}) {
+  // Public: Parses a string like `Ben Gotow <ben@foundry376.com>` into a {Contact}.
+  //
+  // Note: This is called with user-provided values - account aliases in particular -
+  // which are often malformed. `ben@foundry376.com <ben@foundry376.com>` (the email
+  // used as the display name) and strings with no email address at all are both
+  // common. Parsing must never throw: a single bad alias is read by
+  // AccountStore.aliases(), and would otherwise take down every view that calls
+  // Contact#isMe, including the thread list.
+  //
+  // If no email address is present, the returned contact has an empty `email` and
+  // the entire string as its `name`.
+  static fromString(string: string, { accountId }: { accountId?: string } = {}) {
     const emailRegex = RegExpUtils.emailRegex();
-    const match = emailRegex.exec(string);
-    if (emailRegex.exec(string)) {
-      throw new Error(
-        'Error while calling Contact.fromString: string contains more than one email'
-      );
+    const matches: RegExpExecArray[] = [];
+    let match: RegExpExecArray = null;
+    while ((match = emailRegex.exec(string)) !== null) {
+      matches.push(match);
     }
-    const email = match[0];
-    let name = string.substr(0, match.index - 1);
+
+    // When the string contains more than one address, prefer the last one wrapped in
+    // angle brackets (`"a@b.com" <a@b.com>`), and otherwise the last one found, since
+    // the address trails the display name in the `Name <email>` format.
+    const bracketed = matches.filter(
+      (m) => string[m.index - 1] === '<' && string[m.index + m[0].length] === '>'
+    );
+    const chosen = bracketed[bracketed.length - 1] || matches[matches.length - 1];
+
+    const email = chosen ? chosen[0] : '';
+    let name = (chosen ? string.slice(0, chosen.index) : string).trim();
     if (name.endsWith('<') || name.endsWith('(')) {
-      name = name.substr(0, name.length - 1);
+      name = name.slice(0, name.length - 1).trim();
     }
     return new Contact({
       // used to give them random strings, let's try for something consistent
       id: `local-${accountId}-${email}`,
       accountId: accountId,
-      name: name.trim(),
+      name: name,
       email: email,
     });
   }
@@ -437,8 +463,15 @@ export class Contact extends Model {
 
   constructor(data: AttributeValues<typeof Contact.attributes>) {
     super(data);
+    this.normalizeEmail();
     if (!this.contactGroups) {
       this.contactGroups = [];
+    }
+  }
+
+  private normalizeEmail() {
+    if (typeof this.email === 'string') {
+      this.email = this.email.trim();
     }
   }
 
@@ -451,7 +484,7 @@ export class Contact extends Model {
     return this.name && this.name !== this.email ? `${this.name} <${this.email}>` : this.email;
   }
 
-  fromJSON(json) {
+  fromJSON(json: any) {
     // to ensure that old contact data is inflated properly
     // and we can compare hidden === false.
     if (json && !('s' in json)) {
@@ -461,6 +494,7 @@ export class Contact extends Model {
       json['h'] = false;
     }
     super.fromJSON(json);
+    this.normalizeEmail();
     this.name = this.name || this.email;
     return json;
   }
@@ -502,7 +536,11 @@ export class Contact extends Model {
       return null;
     }
 
-    if (includeAccountLabel && account && (AccountStore.accounts().length > 1 || forceAccountLabel)) {
+    if (
+      includeAccountLabel &&
+      account &&
+      (AccountStore.accounts().length > 1 || forceAccountLabel)
+    ) {
       return `${localized('You')} (${account.label})`;
     }
 
@@ -541,15 +579,11 @@ export class Contact extends Model {
 
   firstName() {
     const exclusions = ['a', 'the', 'dr.', 'mrs.', 'mr.', 'mx.', 'prof.', 'ph.d.'];
-    return this._nameParts().find(p => !exclusions.includes(p.toLowerCase())) || '';
+    return this._nameParts().find((p) => !exclusions.includes(p.toLowerCase())) || '';
   }
 
   lastName() {
-    return (
-      this._nameParts()
-        .slice(1)
-        .join(' ') || ''
-    );
+    return this._nameParts().slice(1).join(' ') || '';
   }
 
   nameAbbreviation() {
@@ -561,15 +595,11 @@ export class Contact extends Model {
     return c1 + c2;
   }
 
-  guessCompanyFromEmail(email = this.email) {
+  guessCompanyFromEmail(email: string = this.email) {
     if (Utils.emailHasCommonDomain(email)) {
       return '';
     }
-    const domain = email
-      .toLowerCase()
-      .trim()
-      .split('@')
-      .pop();
+    const domain = email.toLowerCase().trim().split('@').pop();
     const domainParts = domain.split('.');
     if (domainParts.length >= 2) {
       return _str.titleize(_str.humanize(domainParts[domainParts.length - 2]));
@@ -637,7 +667,7 @@ export class Contact extends Model {
     return parts;
   }
 
-  _parseReverseNames(name) {
+  _parseReverseNames(name: string) {
     const parts = [];
     const [lastName, remainder] = name.split(', ');
     if (remainder) {

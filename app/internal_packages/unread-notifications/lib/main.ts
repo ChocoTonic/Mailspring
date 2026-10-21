@@ -1,4 +1,3 @@
-import _ from 'underscore';
 import {
   Thread,
   Actions,
@@ -9,14 +8,17 @@ import {
   DatabaseStore,
   localized,
   DatabaseChangeRecord,
+  TaskFactory,
 } from 'mailspring-exports';
 
 const WAIT_FOR_CHANGES_DELAY = 400;
+const NEW_MAIL_SOUND_QUIET_PERIOD = 5000;
 
 export class Notifier {
   activationTime = Date.now();
   unnotifiedQueue = [];
   hasScheduledNotify = false;
+  lastNewMailSoundRequest = 0;
   unlisteners: Array<() => void>;
   activeNotifications = {};
 
@@ -41,14 +43,17 @@ export class Notifier {
     }
 
     if (objectClass === Message.name) {
-      const newIds = objectsRawJSON.filter(json => json.headersSyncComplete).map(json => json.id);
-      if (!newIds.length) return;
+      const newIds = new Set<string>();
+      for (const json of objectsRawJSON) {
+        if (json.headersSyncComplete) newIds.add(json.id);
+      }
+      if (!newIds.size) return;
       this._onMessagesChanged(objects, newIds);
     }
   }
 
   // async for testing
-  async _onMessagesChanged(msgs, newIds: string[]) {
+  async _onMessagesChanged(msgs, newIds: Set<string>) {
     const notifworthy = {};
 
     for (const msg of msgs) {
@@ -57,7 +62,7 @@ export class Notifier {
       // ensure the message was just created (eg: this is not a modification).
       // The sync engine attaches a JSON key to let us know that this is the first
       // message emitted about this Message. (Hooray hacks around reactive patterns)
-      if (!newIds.includes(msg.id)) continue;
+      if (!newIds.has(msg.id)) continue;
       // ensure the message was received after the app launched (eg: not syncing an old email)
       if (!msg.date || msg.date.valueOf() < this.activationTime) continue;
       // ensure the message is not a loopback
@@ -72,7 +77,7 @@ export class Notifier {
     }
 
     if (!AppEnv.inSpecMode()) {
-      await new Promise(resolve => {
+      await new Promise<void>((resolve) => {
         // wait a couple hundred milliseconds and collect any updates to these
         // new messages. This gets us message bodies, messages impacted by mail rules, etc.
         // while ensuring notifications are never too delayed.
@@ -103,24 +108,40 @@ export class Notifier {
     // Ensure notifications are dismissed when the user reads a thread
     threads.forEach(({ id, unread }) => {
       if (!unread && this.activeNotifications[id]) {
-        this.activeNotifications[id].forEach(n => n.close());
+        this.activeNotifications[id].forEach((n) => n.close());
         delete this.activeNotifications[id];
       }
     });
   }
 
-  _notifyAll() {
-    NativeNotifications.displayNotification({
-      title: `${this.unnotifiedQueue.length} ${localized('Unread Messages')}`,
-      tag: 'unread-update',
-      onActivate: () => {
-        AppEnv.displayWindow();
-      },
-    });
-    this.unnotifiedQueue = [];
+  async _notifyAll(playSound: boolean) {
+    // Extract unique sender names from the queue
+    const count = this.unnotifiedQueue.length;
+    const senders = [
+      ...new Set(
+        this.unnotifiedQueue
+          .map(({ message }) => (message.from[0] ? message.from[0].displayName() : null))
+          .filter(Boolean)
+      ),
+    ] as string[];
+
+    try {
+      await NativeNotifications.displaySummaryNotification({
+        count,
+        senders,
+        playSound,
+        onActivate: () => {
+          AppEnv.displayWindow();
+        },
+      });
+    } finally {
+      // Only remove the items we counted — new items may have been queued during the await.
+      // Removed on failure too, so a notification that throws isn't retried every 2s forever.
+      this.unnotifiedQueue.splice(0, count);
+    }
   }
 
-  _notifyOne({ message, thread }) {
+  async _notifyOne({ message, thread }, playSound: boolean) {
     const from = message.from[0] ? message.from[0].displayName() : 'Unknown';
     const title = from;
     let subtitle = null;
@@ -133,25 +154,39 @@ export class Notifier {
       body = null;
     }
 
-    const notification = NativeNotifications.displayNotification({
+    const notification = await NativeNotifications.displayNotification({
       title: title,
       subtitle: subtitle,
       body: body,
+      tag: `thread-${thread.id}`,
+      threadId: thread.id,
+      messageId: message.id,
+      playSound,
+
+      // macOS inline reply
       canReply: true,
-      tag: 'unread-update',
-      onActivate: ({ response, activationType }) => {
+      replyPlaceholder: localized('Reply to %@...', from),
+
+      // macOS action buttons
+      actions: [
+        { type: 'button', text: localized('Mark as Read') },
+        { type: 'button', text: localized('Archive') },
+      ],
+
+      onActivate: ({ response, activationType, actionIndex }) => {
         if (activationType === 'replied' && response && typeof response === 'string') {
           Actions.sendQuickReply({ thread, message }, response);
-        } else {
+        } else if (activationType === 'action') {
+          this._handleNotificationAction(actionIndex, thread);
+        } else if (activationType === 'clicked') {
           AppEnv.displayWindow();
+          if (!thread) {
+            AppEnv.showErrorDialog(`Can't find that thread`);
+            return;
+          }
+          Actions.ensureCategoryIsFocused('inbox', thread.accountId);
+          Actions.setFocus({ collection: 'thread', item: thread });
         }
-
-        if (!thread) {
-          AppEnv.showErrorDialog(`Can't find that thread`);
-          return;
-        }
-        Actions.ensureCategoryIsFocused('inbox', thread.accountId);
-        Actions.setFocus({ collection: 'thread', item: thread });
       },
     });
 
@@ -164,29 +199,59 @@ export class Notifier {
     }
   }
 
-  _notifyMessages() {
-    if (this.unnotifiedQueue.length >= 5) {
-      this._notifyAll();
-    } else if (this.unnotifiedQueue.length > 0) {
-      this._notifyOne(this.unnotifiedQueue.shift());
-    }
-
-    this.hasScheduledNotify = false;
-    if (this.unnotifiedQueue.length > 0) {
-      setTimeout(() => this._notifyMessages(), 2000);
-      this.hasScheduledNotify = true;
+  _handleNotificationAction(actionIndex: number, thread: Thread) {
+    switch (actionIndex) {
+      case 0: // Mark as Read
+        Actions.queueTask(
+          TaskFactory.taskForSettingUnread({
+            threads: [thread],
+            unread: false,
+            source: 'Notification Action',
+          })
+        );
+        break;
+      case 1: // Archive
+        Actions.queueTasks(
+          TaskFactory.tasksForArchiving({
+            threads: [thread],
+            source: 'Notification Action',
+          })
+        );
+        break;
     }
   }
 
-  _playNewMailSound = _.debounce(
-    () => {
-      if (!AppEnv.config.get('core.notifications.sounds')) return;
-      if (NativeNotifications.doNotDisturb()) return;
-      SoundRegistry.playSound('new-mail');
-    },
-    5000,
-    true
-  );
+  async _notifyMessages(playSound = false) {
+    // Set the guard immediately to prevent concurrent re-entry during async operations.
+    // Without this, a second _onNewMessagesReceived call during the await below would
+    // start a concurrent _notifyMessages, causing duplicate or conflicting notifications.
+    this.hasScheduledNotify = true;
+
+    // A failure must not skip the guard reset below, or notifications stop until relaunch.
+    try {
+      if (this.unnotifiedQueue.length >= 5) {
+        await this._notifyAll(playSound);
+      } else if (this.unnotifiedQueue.length > 0) {
+        await this._notifyOne(this.unnotifiedQueue.shift(), playSound);
+      }
+    } catch (err) {
+      AppEnv.reportError(err);
+    }
+
+    if (this.unnotifiedQueue.length > 0) {
+      setTimeout(() => this._notifyMessages(), 2000);
+    } else {
+      this.hasScheduledNotify = false;
+    }
+  }
+
+  // One sound per burst of mail: suppressed until mail has stopped arriving for the quiet period.
+  _shouldPlayNewMailSound() {
+    const now = Date.now();
+    const quiet = now - this.lastNewMailSoundRequest >= NEW_MAIL_SOUND_QUIET_PERIOD;
+    this.lastNewMailSoundRequest = now;
+    return quiet && !!AppEnv.config.get('core.notifications.sounds');
+  }
 
   _onNewMessagesReceived(newMessages) {
     if (newMessages.length === 0) {
@@ -208,7 +273,7 @@ export class Notifier {
     return DatabaseStore.findAll<Thread>(
       Thread,
       Thread.attributes.id.in(Object.keys(threadIds))
-    ).then(threadsArray => {
+    ).then((threadsArray) => {
       const threads = {};
       for (const t of threadsArray) {
         threads[t.id] = t;
@@ -216,7 +281,7 @@ export class Notifier {
 
       // Filter new messages to just the ones in the inbox
       const newMessagesInInbox = newMessages.filter(({ threadId }) => {
-        return threads[threadId] && threads[threadId].categories.find(c => c.role === 'inbox');
+        return threads[threadId] && threads[threadId].categories.find((c) => c.role === 'inbox');
       });
 
       if (newMessagesInInbox.length === 0) {
@@ -227,8 +292,11 @@ export class Notifier {
         this.unnotifiedQueue.push({ message: msg, thread: threads[msg.threadId] });
       }
       if (!this.hasScheduledNotify) {
-        this._playNewMailSound();
-        this._notifyMessages();
+        const playSound = this._shouldPlayNewMailSound();
+        if (playSound && !NativeNotifications.playsSoundWithNotification) {
+          SoundRegistry.playSound('new-mail');
+        }
+        this._notifyMessages(playSound && NativeNotifications.playsSoundWithNotification);
       }
     });
   }

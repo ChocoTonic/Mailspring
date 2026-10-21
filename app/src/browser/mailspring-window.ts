@@ -3,9 +3,29 @@ import path from 'path';
 import fs from 'fs';
 import url from 'url';
 import { EventEmitter } from 'events';
+import { isWaylandSession } from './is-wayland';
+import { developerToolsAvailable } from '../developer-tools';
+import { XDG_DATA_PATHS, getFirstExistingPath } from '../utils/xdg-paths';
+import { prepareViewWebview, guardViewGuest } from './view-sessions';
+
+import {
+  attemptEarlyRendererCrashRecovery,
+  isPrimaryWindow,
+} from './hardware-acceleration-recovery';
 
 let WindowIconPath = null;
 let idNum = 0;
+
+const mailspringWebContents = new WeakSet<Electron.WebContents>();
+
+/**
+ * True for the renderers of Mailspring's own windows. Other top-level windows (print
+ * preview, quick preview, "show original") display untrusted content and must not be
+ * able to drive the main process.
+ */
+export function isMailspringWindowContents(contents: Electron.WebContents) {
+  return mailspringWebContents.has(contents);
+}
 
 export interface MailspringWindowSettings {
   frame?: boolean;
@@ -31,19 +51,24 @@ export interface MailspringWindowSettings {
   bootstrapScript?: string;
   appVersion?: string;
   shellLoadTime?: number;
+  // Allow additional properties for extensibility
+  [key: string]: unknown;
 }
 
 export default class MailspringWindow extends EventEmitter {
   static includeShellLoadTime = true;
 
   public windowType: string;
-  public browserWindow: BrowserWindow = null;
+  public browserWindow: BrowserWindow & {
+    loadSettings?: MailspringWindowSettings;
+    loadSettingsChangedSinceGetURL?: boolean;
+  } = null;
   public devMode: boolean;
   public safeMode: boolean;
 
   private loaded: boolean;
   private isSpec: boolean;
-  private windowKey: string;
+  public windowKey: string;
   private neverClose: boolean;
   private mainWindow: boolean;
   private resourcePath: string;
@@ -55,7 +80,7 @@ export default class MailspringWindow extends EventEmitter {
   constructor(settings: MailspringWindowSettings = {}) {
     super();
 
-    let frame, height, pathToOpen, resizable, title, width, autoHideMenuBar;
+    let frame, height, pathToOpen, resizable, title, width, autoHideMenuBar, titleBarStyle;
 
     ({
       frame,
@@ -65,6 +90,7 @@ export default class MailspringWindow extends EventEmitter {
       // toolbar, present but passed through to client-side
       resizable,
       pathToOpen,
+      titleBarStyle,
       isSpec: this.isSpec,
       devMode: this.devMode,
       windowKey: this.windowKey,
@@ -96,18 +122,27 @@ export default class MailspringWindow extends EventEmitter {
       width,
       height,
       resizable,
+      titleBarStyle,
       webPreferences: {
         nodeIntegration: true,
         contextIsolation: false,
         webviewTag: true,
-        enableRemoteModule: true,
+        // Withholding the capability, rather than only the ways to ask for it, is what makes
+        // the console unreachable in a packaged build: these windows hand the renderer a
+        // @electron/remote handle to their own webContents, so any code running in them could
+        // otherwise call openDevTools() directly. Electron turns such calls into silent no-ops.
+        devTools: developerToolsAvailable(),
+        // Note: @electron/remote is enabled via remote.initialize() in main process
       },
       autoHideMenuBar,
     };
 
-    if (this.neverClose) {
+    if (this.neverClose || this.isSpec) {
       // Prevents DOM timers from being suspended when the main window is hidden.
       // Means there's not an awkward catch-up when you re-show the main window.
+      // For spec windows, this is critical: the hidden spec window would otherwise
+      // throttle setTimeout calls to ~1Hz, making each test take ~1s and causing
+      // the full test suite to exceed CI time limits.
       browserWindowOptions.webPreferences.backgroundThrottling = false;
     }
 
@@ -115,8 +150,11 @@ export default class MailspringWindow extends EventEmitter {
     // taskbar's icon. See https://github.com/atom/atom/issues/4811 for more.
     if (process.platform === 'linux') {
       if (!WindowIconPath) {
-        WindowIconPath = path.resolve('/usr', 'share', 'pixmaps', 'mailspring.png');
-        if (!fs.existsSync(WindowIconPath)) {
+        WindowIconPath = getFirstExistingPath(
+          XDG_DATA_PATHS,
+          path.join('pixmaps', 'mailspring.png')
+        );
+        if (!WindowIconPath) {
           WindowIconPath = path.resolve(this.resourcePath, 'static', 'images', 'mailspring.png');
         }
       }
@@ -124,7 +162,36 @@ export default class MailspringWindow extends EventEmitter {
     }
 
     this.browserWindow = new BrowserWindow(browserWindowOptions);
-    require("@electron/remote/main").enable(this.browserWindow.webContents);
+    mailspringWebContents.add(this.browserWindow.webContents);
+
+    // Constrain every <webview> guest to low-privilege preferences regardless of
+    // the attributes on the tag, and strip any preload it requests. The only
+    // legitimate guest (the onboarding sign-in view in
+    // app/src/components/webview.tsx) displays remote web content and needs none
+    // of these privileges. Do not relax this. See GHSA-x8wg-258g-v28h.
+    //
+    // Sandboxed View guests get their bridge preload from their session (registered by
+    // view-sessions.ts), never from the tag, so stripping preloads here applies to them too.
+    this.browserWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+      delete (webPreferences as any).preload;
+      delete (params as any).preload;
+      delete (params as any).webpreferences;
+      delete (params as any).nodeintegration;
+      delete (params as any).nodeintegrationinsubframes;
+      webPreferences.nodeIntegration = false;
+      webPreferences.nodeIntegrationInSubFrames = false;
+      webPreferences.contextIsolation = true;
+      webPreferences.sandbox = true;
+      webPreferences.devTools = developerToolsAvailable();
+      if (!prepareViewWebview(webPreferences, params as any)) {
+        event.preventDefault();
+      }
+    });
+    this.browserWindow.webContents.on('did-attach-webview', (_event, guest) => {
+      guardViewGuest(guest);
+    });
+
+    require('@electron/remote/main').enable(this.browserWindow.webContents);
     (this.browserWindow as any).updateLoadSettings = this.updateLoadSettings;
 
     this.handleEvents();
@@ -155,7 +222,12 @@ export default class MailspringWindow extends EventEmitter {
 
     loadSettings.initialPath = pathToOpen;
 
-    const stats = fs.statSyncNoException(pathToOpen);
+    let stats: fs.Stats | false = false;
+    try {
+      stats = fs.statSync(pathToOpen);
+    } catch (e) {
+      // path doesn't exist
+    }
     if (stats && stats.isFile && stats.isFile()) {
       loadSettings.initialPath = path.dirname(pathToOpen);
     }
@@ -172,6 +244,35 @@ export default class MailspringWindow extends EventEmitter {
       }
       this.emit('window:loaded');
     });
+
+    // On Wayland, Electron's ready-to-show event is broken (DidMeaningfulLayout never
+    // fires - see https://github.com/electron/electron/issues/48859). Calling show()
+    // much later (at window:loaded time) also fails silently because the Wayland surface
+    // was never committed. However, show() works reliably at did-finish-load time, when
+    // the HTML is loaded, themes/styles are applied, and React root is mounted - the UI
+    // is nearly complete. This is the same workaround used by FreeTube and Signal Desktop.
+    //
+    // When --background is requested on Wayland we must still show briefly to commit the
+    // Wayland surface (otherwise show() silently fails). Once the window finishes
+    // initializing (window:loaded) we hide it again so the net effect matches what the
+    // user asked for: Mailspring running silently in the background.
+    if (isWaylandSession()) {
+      this.browserWindow.webContents.once('did-finish-load', () => {
+        if (!this.browserWindow.isDestroyed() && !this.browserWindow.isVisible()) {
+          const initInBackground = this.browserWindow.loadSettings?.initializeInBackground;
+          this.browserWindow.show();
+          if (initInBackground) {
+            this.once('window:loaded', () => {
+              if (!this.browserWindow.isDestroyed()) {
+                this.browserWindow.hide();
+              }
+            });
+          } else {
+            this.browserWindow.focus();
+          }
+        }
+      });
+    }
 
     this.browserWindow.loadURL(this.getURL(loadSettings));
     if (this.isSpec) {
@@ -217,7 +318,7 @@ export default class MailspringWindow extends EventEmitter {
     // action.
     //
     // This uses the DOM's `beforeunload` event.
-    this.browserWindow.on('close', event => {
+    this.browserWindow.on('close', (event: Electron.Event) => {
       if (global.application.isQuitting()) {
         return;
       }
@@ -255,14 +356,6 @@ export default class MailspringWindow extends EventEmitter {
       }
     });
 
-    this.browserWindow.on('scroll-touch-begin', () => {
-      this.browserWindow.webContents.send('scroll-touch-begin');
-    });
-
-    this.browserWindow.on('scroll-touch-end', () => {
-      this.browserWindow.webContents.send('scroll-touch-end');
-    });
-
     this.browserWindow.on('focus', () => {
       this.browserWindow.webContents.send('browser-window-focus');
     });
@@ -283,8 +376,8 @@ export default class MailspringWindow extends EventEmitter {
       event.preventDefault();
     });
 
-    this.browserWindow.webContents.on('new-window', (event, url, frameName, disposition) => {
-      event.preventDefault();
+    this.browserWindow.webContents.setWindowOpenHandler(({ url, frameName, disposition }) => {
+      return { action: 'deny' };
     });
 
     this.browserWindow.on('unresponsive', () => {
@@ -309,7 +402,8 @@ export default class MailspringWindow extends EventEmitter {
       }
     });
 
-    this.browserWindow.webContents.on('crashed', (event, killed) => {
+    this.browserWindow.webContents.on('render-process-gone', (event, details) => {
+      const killed = details.reason === 'killed';
       if (killed) {
         // Killed means that the app is exiting and the browser window is being
         // forceably cleaned up. Carry on, do not try to reload the window.
@@ -317,8 +411,24 @@ export default class MailspringWindow extends EventEmitter {
         return;
       }
 
+      if (
+        attemptEarlyRendererCrashRecovery({
+          app,
+          configDirPath: this.configDirPath,
+          loaded: this.loaded,
+          primaryWindow: isPrimaryWindow({
+            mainWindow: this.mainWindow,
+            windowType: this.windowType,
+          }),
+          reason: details.reason,
+        })
+      ) {
+        return;
+      }
+
       if (this.exitWhenDone) {
         app.exit(100);
+        return;
       }
 
       if (this.neverClose) {
@@ -465,6 +575,7 @@ export default class MailspringWindow extends EventEmitter {
   }
 
   toggleDevTools() {
+    if (!developerToolsAvailable()) return;
     this.browserWindow.webContents.toggleDevTools();
   }
 }

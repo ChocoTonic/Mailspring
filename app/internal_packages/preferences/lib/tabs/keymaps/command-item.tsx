@@ -1,7 +1,5 @@
 import React from 'react';
 import ReactDOM from 'react-dom';
-import PropTypes from 'prop-types';
-import _ from 'underscore';
 import { Flexbox } from 'mailspring-component-kit';
 import { localized } from 'mailspring-exports';
 import fs from 'fs';
@@ -24,12 +22,6 @@ export default class CommandKeybinding extends React.Component<
   CommandKeybindingProps,
   CommandKeybindingState
 > {
-  static propTypes = {
-    bindings: PropTypes.array,
-    label: PropTypes.string,
-    command: PropTypes.string,
-  };
-
   _mounted = false;
 
   constructor(props) {
@@ -58,38 +50,51 @@ export default class CommandKeybinding extends React.Component<
     this._mounted = false;
   }
 
-  _formatKeystrokes(original) {
-    // On Windows, display cmd-shift-c
-    if (process.platform === 'win32') return original;
-
-    // Replace "cmd" => ⌘, etc.
-    const modifiers = [
-      [/\+(?!$)/gi, ''],
-      [/command/gi, '⌘'],
-      [/meta/gi, '⌘'],
-      [/alt/gi, '⌥'],
-      [/shift/gi, '⇧'],
-      [/ctrl/gi, '^'],
-      [/mod/gi, process.platform === 'darwin' ? '⌘' : '^'],
-    ];
+  _formatKeystrokes(original: string) {
+    // macOS shows menu-bar glyphs (⌘⇧D); Windows and Linux spell shortcuts out
+    // (Ctrl+Shift+D), and their users don't read ^ or ⌥ as modifier keys.
+    const isMac = process.platform === 'darwin';
+    const modifiers: [RegExp, string][] = isMac
+      ? [
+          [/\+(?!$)/gi, ''],
+          [/command/gi, '⌘'],
+          [/meta/gi, '⌘'],
+          [/alt/gi, '⌥'],
+          [/shift/gi, '⇧'],
+          [/ctrl/gi, '^'],
+          [/mod/gi, '⌘'],
+        ]
+      : [
+          [/alt/gi, 'Alt'],
+          [/shift/gi, 'Shift'],
+          [/ctrl/gi, 'Ctrl'],
+          [/mod/gi, 'Ctrl'],
+        ];
     let clean = original;
     for (const [regexp, char] of modifiers) {
       clean = clean.replace(regexp, char);
     }
 
-    // ⌘⇧c => ⌘⇧C
-    if (clean !== original) {
-      clean = clean.toUpperCase();
+    if (isMac) {
+      // ⌘⇧c => ⌘⇧C
+      if (clean !== original) {
+        clean = clean.toUpperCase();
+      }
+      // backspace => Backspace
+      if (original.length > 1 && clean === original) {
+        clean = clean[0].toUpperCase() + clean.slice(1);
+      }
+      return clean;
     }
 
-    // backspace => Backspace
-    if (original.length > 1 && clean === original) {
-      clean = clean[0].toUpperCase() + clean.slice(1);
-    }
-    return clean;
+    // ctrl+shift+d => Ctrl+Shift+D, alt+backspace => Alt+Backspace
+    return clean
+      .split('+')
+      .map((part) => (part.length > 0 ? part[0].toUpperCase() + part.slice(1) : part))
+      .join('+');
   }
 
-  _renderKeystrokes = (keystrokes, idx) => {
+  _renderKeystrokes = (keystrokes: string, idx: number) => {
     const elements = [];
     const splitKeystrokes = keystrokes.split(' ');
     splitKeystrokes.forEach((keystroke, kidx) => {
@@ -149,7 +154,7 @@ export default class CommandKeybinding extends React.Component<
     }, 100);
   };
 
-  _onKey = event => {
+  _onKey = (event: React.KeyboardEvent<HTMLElement>) => {
     if (!this.state.editing) {
       return;
     }
@@ -164,7 +169,7 @@ export default class CommandKeybinding extends React.Component<
 
     let { keys, modifiers } = this.state;
     keys = keys.concat([eventKey]);
-    modifiers = _.uniq(modifiers.concat(eventMods));
+    modifiers = [...new Set(modifiers.concat(eventMods))];
 
     let editingBinding = keys.join(' ');
     if (modifiers.length > 0) {
@@ -185,7 +190,11 @@ export default class CommandKeybinding extends React.Component<
 
     let value: React.ReactChild | React.ReactChild[] = 'None';
     if (bindings.length > 0) {
-      value = _.uniq(bindings).map(this._renderKeystrokes);
+      // Templates may list mod+a and ctrl+a for one command; they are the same key
+      // on Windows and Linux, so dedupe by what the user would actually press.
+      const mod = process.platform === 'darwin' ? 'command' : 'ctrl';
+      const byKey = new Map(bindings.map((b) => [b.replace(/\bmod\b/g, mod), b]));
+      value = [...byKey.values()].map(this._renderKeystrokes);
     }
 
     let classnames = 'shortcut';

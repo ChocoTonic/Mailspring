@@ -61,6 +61,8 @@ lazyLoad(`MailspringAPIRequest`, 'flux/mailspring-api-request');
 lazyLoad(`MailsyncProcess`, 'mailsync-process');
 // The Database
 lazyLoad(`Matcher`, 'flux/attributes/matcher');
+lazyLoadWithGetter('AndCompositeMatcher', () => require('../flux/attributes/matcher').AndCompositeMatcher);
+lazyLoadWithGetter('OrCompositeMatcher', () => require('../flux/attributes/matcher').OrCompositeMatcher);
 lazyLoad(`DatabaseStore`, 'flux/stores/database-store');
 lazyLoad(`QueryResultSet`, 'flux/models/query-result-set');
 lazyLoad(`QuerySubscription`, 'flux/models/query-subscription');
@@ -106,10 +108,12 @@ lazyLoadAndRegisterTask(`DestroyModelTask`, 'destroy-model-task');
 lazyLoadAndRegisterTask(`SyncbackDraftTask`, 'syncback-draft-task');
 lazyLoadAndRegisterTask(`ChangeStarredTask`, 'change-starred-task');
 lazyLoadAndRegisterTask(`SyncbackEventTask`, 'syncback-event-task');
+lazyLoadAndRegisterTask(`DestroyEventTask`, 'destroy-event-task');
 lazyLoadAndRegisterTask(`DestroyCategoryTask`, 'destroy-category-task');
 lazyLoadAndRegisterTask(`SyncbackCategoryTask`, 'syncback-category-task');
 lazyLoadAndRegisterTask(`SyncbackMetadataTask`, 'syncback-metadata-task');
 lazyLoadAndRegisterTask(`GetMessageRFC2822Task`, 'get-message-rfc2822-task');
+lazyLoadAndRegisterTask(`GetManyRFC2822Task`, 'get-many-rfc2822-task');
 lazyLoadAndRegisterTask(`ExpungeAllInFolderTask`, 'expunge-all-in-folder-task');
 lazyLoadAndRegisterTask(`ChangeRoleMappingTask`, 'change-role-mapping-task');
 lazyLoadAndRegisterTask(`SendFeatureUsageEventTask`, 'send-feature-usage-event-task');
@@ -152,6 +156,9 @@ load(`FocusedContactsStore`, 'flux/stores/focused-contacts-store');
 load(`FolderSyncProgressStore`, 'flux/stores/folder-sync-progress-store');
 load(`FocusedPerspectiveStore`, 'flux/stores/focused-perspective-store');
 load(`SearchableComponentStore`, 'flux/stores/searchable-component-store');
+lazyLoad(`LocalModelStore`, 'flux/stores/local-model-store');
+lazyLoad(`LocalModelPrompt`, 'flux/stores/local-model-prompt');
+lazyLoad(`LocalModelSummaries`, 'flux/stores/local-model-summaries');
 
 lazyLoad(`ServiceRegistry`, `registries/service-registry`);
 
@@ -172,14 +179,19 @@ lazyLoadWithGetter(`PropTypes`, () => require('prop-types'));
 
 // React Components
 lazyLoad(`ComponentRegistry`, 'registries/component-registry');
+lazyLoadWithGetter(`SheetDepthContext`, () => require('../sheet-context').SheetDepthContext);
 
 // Utils
 lazyLoad(`Utils`, 'flux/models/utils');
 lazyLoad(`DOMUtils`, 'dom-utils');
 lazyLoad(`DateUtils`, 'date-utils');
+lazyLoadWithGetter(`imapUtf7`, () => require('../utils/imap-utf7').imapUtf7);
 lazyLoad(`CalendarUtils`, 'calendar-utils');
+lazyLoad(`CalendarDateUtils`, 'calendar-date');
+lazyLoad(`ICSEventHelpers`, 'ics-event-helpers');
 lazyLoad(`FsUtils`, 'fs-utils');
 lazyLoad(`CanvasUtils`, 'canvas-utils');
+lazyLoad(`DragDropTypes`, 'drag-drop-types');
 lazyLoad(`RegExpUtils`, 'regexp-utils');
 lazyLoad(`MenuHelpers`, 'menu-helpers');
 lazyLoad(`VirtualDOMUtils`, 'virtual-dom-utils');
@@ -187,6 +199,8 @@ lazyLoad(`Spellchecker`, 'spellchecker');
 lazyLoad(`MessageUtils`, 'flux/models/message-utils');
 
 // Services
+lazyLoad(`EmlUtils`, 'services/eml-utils');
+lazyLoad(`MboxUtils`, 'services/mbox-utils');
 lazyLoad(`KeyManager`, 'key-manager');
 lazyLoad(`SoundRegistry`, 'registries/sound-registry');
 lazyLoad(`MailRulesTemplates`, 'mail-rules-templates');
@@ -198,6 +212,14 @@ lazyLoad(`SanitizeTransformer`, 'services/sanitize-transformer');
 lazyLoad(`QuotedHTMLTransformer`, 'services/quoted-html-transformer');
 lazyLoad(`InlineStyleTransformer`, 'services/inline-style-transformer');
 lazyLoad(`SearchableComponentMaker`, 'searchable-components/searchable-component-maker');
+
+// Composer Editor Plugin APIs
+// Used by internal packages that need to interact with editor plugins registered in core
+// (e.g. composer-grammar-check activates/deactivates the grammar Slate plugin via this API).
+lazyLoadWithGetter(
+  `GrammarCheckPluginAPI`,
+  () => require('../components/composer-editor/grammar-check-plugins').GrammarCheckPluginAPI
+);
 
 // Errors
 lazyLoadWithGetter(`APIError`, () => require('../flux/errors').APIError);

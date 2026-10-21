@@ -31,7 +31,7 @@ export class SendActionButton extends React.Component<
   _unlisteners = [];
   _composedComponent: any;
 
-  constructor(props) {
+  constructor(props: SendActionButtonProps) {
     super(props);
     this.state = {
       sendActions: SendActionsStore.orderedSendActionsForDraft(props.draft),
@@ -48,10 +48,12 @@ export class SendActionButton extends React.Component<
     );
   }
 
-  componentWillReceiveProps(nextProps) {
-    this.setState({
-      sendActions: SendActionsStore.orderedSendActionsForDraft(nextProps.draft),
-    });
+  componentDidUpdate(prevProps: SendActionButtonProps) {
+    if (prevProps.draft !== this.props.draft) {
+      this.setState({
+        sendActions: SendActionsStore.orderedSendActionsForDraft(this.props.draft),
+      });
+    }
   }
 
   componentWillUnmount() {
@@ -63,10 +65,10 @@ export class SendActionButton extends React.Component<
 
   /* This component is re-rendered constantly because `draft` changes in random ways.
   We only use the draft prop when you click send, so update with more discretion. */
-  shouldComponentUpdate(nextProps, nextState) {
+  shouldComponentUpdate(nextProps: SendActionButtonProps, nextState: SendActionButtonState) {
     return (
-      nextState.sendActions.map(a => a.configKey).join(',') !==
-      this.state.sendActions.map(a => a.configKey).join(',')
+      nextState.sendActions.map((a) => a.configKey).join(',') !==
+      this.state.sendActions.map((a) => a.configKey).join(',')
     );
   }
 
@@ -78,7 +80,7 @@ export class SendActionButton extends React.Component<
     this._onSendWithAction(this.state.sendActions[0]);
   };
 
-  _onSendWithAction = sendAction => {
+  _onSendWithAction = (sendAction: ISendAction) => {
     if (this.props.isValidDraft()) {
       if (AppEnv.config.get('core.sending.sounds')) {
         SoundRegistry.playSound('hit-send');
@@ -98,7 +100,11 @@ export class SendActionButton extends React.Component<
 
     return (
       <span>
-        <RetinaImg name="icon-composer-send.png" mode={RetinaImg.Mode.ContentIsMask} />
+        <RetinaImg
+          name="icon-composer-send.png"
+          mode={RetinaImg.Mode.ContentIsMask}
+          aria-hidden="true"
+        />
         <span className="text">
           {localized(`Send`)}
           {plusHTML}
@@ -120,7 +126,7 @@ export class SendActionButton extends React.Component<
         menu={
           <Menu
             items={this.state.sendActions.slice(1)}
-            itemKey={actionConfig => actionConfig.configKey}
+            itemKey={(actionConfig) => actionConfig.configKey}
             itemContent={this._renderSendActionItem}
             onSelect={this._onSendWithAction}
           />

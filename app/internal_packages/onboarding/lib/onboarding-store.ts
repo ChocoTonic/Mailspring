@@ -13,6 +13,8 @@ import * as OnboardingActions from './onboarding-actions';
 class OnboardingStore extends MailspringStore {
   _account: Account;
   _pageStack: string[];
+  // Cleared by any later setAccount, such as submitting the form or going back.
+  _confirmServers = false;
 
   constructor() {
     super();
@@ -43,6 +45,8 @@ class OnboardingStore extends MailspringStore {
         this._pageStack = ['account-choose', 'account-settings-gmail'];
       } else if (this._account.provider === 'office365') {
         this._pageStack = ['account-choose', 'account-settings-o365'];
+      } else if (this._account.provider === 'outlook') {
+        this._pageStack = ['account-choose', 'account-settings-outlook'];
       } else if (this._account.provider === 'imap') {
         this._pageStack = ['account-choose', 'account-settings', 'account-settings-imap'];
       } else {
@@ -78,13 +82,15 @@ class OnboardingStore extends MailspringStore {
     }, 100);
   };
 
-  _onChooseAccountProvider = provider => {
+  _onChooseAccountProvider = (provider: string) => {
     const nextPage =
       provider === 'gmail'
         ? 'account-settings-gmail'
         : provider === 'office365'
-        ? 'account-settings-o365'
-        : 'account-settings';
+          ? 'account-settings-o365'
+          : provider === 'outlook'
+            ? 'account-settings-outlook'
+            : 'account-settings';
 
     // Don't carry over any type-specific account information
     this._onSetAccount(
@@ -99,20 +105,25 @@ class OnboardingStore extends MailspringStore {
     this._onMoveToPage(nextPage);
   };
 
-  _onSetAccount = acct => {
+  _onSetAccount = (
+    acct: Account,
+    { confirmServers = false }: { confirmServers?: boolean } = {}
+  ) => {
     if (!(acct instanceof Account)) {
       throw new Error('OnboardingActions.setAccount expects an Account instance.');
     }
     this._account = acct;
+    this._confirmServers = confirmServers;
     this.trigger();
   };
 
   _onMoveToPreviousPage = () => {
+    if (this._pageStack.length <= 1) return;
     this._pageStack.pop();
     this.trigger();
   };
 
-  _onMoveToPage = page => {
+  _onMoveToPage = (page: string) => {
     this._pageStack.push(page);
     this.trigger();
   };
@@ -140,7 +151,7 @@ class OnboardingStore extends MailspringStore {
     }, 1000);
   };
 
-  _onFinishAndAddAccount = async account => {
+  _onFinishAndAddAccount = async (account: Account) => {
     const isFirstAccount = AccountStore.accounts().length === 0;
 
     try {
@@ -179,6 +190,10 @@ class OnboardingStore extends MailspringStore {
 
   account() {
     return this._account;
+  }
+
+  confirmServers() {
+    return this._confirmServers;
   }
 }
 

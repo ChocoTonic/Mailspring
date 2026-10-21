@@ -1,7 +1,14 @@
 import React from 'react';
-import { localized, UndoRedoStore, SyncbackMetadataTask, DatabaseStore, Message, Actions } from 'mailspring-exports';
+import {
+  localized,
+  UndoRedoStore,
+  SyncbackMetadataTask,
+  DatabaseStore,
+  Message,
+  Actions,
+} from 'mailspring-exports';
 import { RetinaImg } from 'mailspring-component-kit';
-import { CSSTransitionGroup } from 'react-transition-group';
+import { CSSTransition, TransitionGroup } from 'react-transition-group';
 import { PLUGIN_ID } from '../../../internal_packages/send-later/lib/send-later-constants';
 
 function isUndoSend(block) {
@@ -14,22 +21,31 @@ function isUndoSend(block) {
 
 async function sendMessageNow(block) {
   if (isUndoSend(block)) {
-      const message = await DatabaseStore.find<Message>(Message, (block.tasks[0] as SyncbackMetadataTask).modelId),
-        newExpiry = Math.floor(Date.now() / 1000);
+    const message = await DatabaseStore.find<Message>(
+        Message,
+        (block.tasks[0] as SyncbackMetadataTask).modelId
+      ),
+      newExpiry = Math.floor(Date.now() / 1000);
 
-      Actions.queueTask(
-        SyncbackMetadataTask.forSaving({
-          model: message,
-          pluginId: PLUGIN_ID,
-          value: {
-            expiration: newExpiry,
-          },
-        })
-      );
-      
-      block.tasks[0].value.expiration = newExpiry;
-
+    // Message may be null if the sync engine already processed/sent it before
+    // the user clicked "Send now". In that case there's nothing to do.
+    if (!message) {
       return true;
+    }
+
+    Actions.queueTask(
+      SyncbackMetadataTask.forSaving({
+        model: message,
+        pluginId: PLUGIN_ID,
+        value: {
+          expiration: newExpiry,
+        },
+      })
+    );
+
+    block.tasks[0].value.expiration = newExpiry;
+
+    return true;
   }
 
   return false;
@@ -54,9 +70,9 @@ class Countdown extends React.Component<{ expiration: number }, { x: number }> {
     this.state = { x: 0 };
   }
 
-  componentWillReceiveProps(nextProps) {
-    if (nextProps.expiration !== this.props.expiration) {
-      this.animationDuration = `${nextProps.expiration - Date.now()}ms`;
+  componentDidUpdate(prevProps: { expiration: number }) {
+    if (prevProps.expiration !== this.props.expiration) {
+      this.animationDuration = `${this.props.expiration - Date.now()}ms`;
     }
   }
 
@@ -99,7 +115,12 @@ const UndoSendContent = ({ block, onMouseEnter, onMouseLeave }) => {
     <div className="content" onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
       <Countdown expiration={getUndoSendExpiration(block)} />
       <div className="message">{localized('Sending soon...')}</div>
-      <div className="action" onClick={async () => { await sendMessageNow(block) && onMouseLeave() }}>
+      <div
+        className="action"
+        onClick={async () => {
+          (await sendMessageNow(block)) && onMouseLeave();
+        }}
+      >
         <RetinaImg name="icon-composer-send.png" mode={RetinaImg.Mode.ContentIsMask} />
         <span className="send-action-text">{localized('Send now instead')}</span>
       </div>
@@ -194,20 +215,17 @@ export default class UndoRedoToast extends React.Component<
     const Component = block && (isUndoSend(block) ? UndoSendContent : BasicContent);
 
     return (
-      <CSSTransitionGroup
-        className="undo-redo-toast"
-        transitionLeaveTimeout={150}
-        transitionEnterTimeout={150}
-        transitionName="undo-redo-toast-fade"
-      >
+      <TransitionGroup className="undo-redo-toast" component="div">
         {block ? (
-          <Component
-            block={block}
-            onMouseEnter={this._onMouseEnter}
-            onMouseLeave={this._onMouseLeave}
-          />
+          <CSSTransition key={block.id || 'toast'} classNames="undo-redo-toast-fade" timeout={150}>
+            <Component
+              block={block}
+              onMouseEnter={this._onMouseEnter}
+              onMouseLeave={this._onMouseLeave}
+            />
+          </CSSTransition>
         ) : null}
-      </CSSTransitionGroup>
+      </TransitionGroup>
     );
   }
 }

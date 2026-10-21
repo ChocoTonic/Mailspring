@@ -1,6 +1,5 @@
 import React from 'react';
 import { findDOMNode } from 'react-dom';
-import PropTypes from 'prop-types';
 
 const MIN_RANGE_SIZE = 2;
 
@@ -46,8 +45,14 @@ export class LazyRenderedList extends React.Component<
     this.state = this.getRangeState(props);
   }
 
-  componentWillReceiveProps(nextProps) {
-    this.updateRangeState(nextProps);
+  componentDidUpdate(prevProps: LazyRenderedListProps) {
+    if (
+      prevProps.items !== this.props.items ||
+      prevProps.itemHeight !== this.props.itemHeight ||
+      prevProps.containerHeight !== this.props.containerHeight
+    ) {
+      this.updateRangeState(this.props);
+    }
   }
 
   onScroll = () => {

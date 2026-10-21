@@ -20,6 +20,7 @@
     color: @text-color;
     outline: none;
     font-family: @font-family-monospace;
+
     &:focus {
       border: none;
       box-shadow: none;
@@ -36,11 +37,22 @@
     padding-top: 12px;
     position: relative; // needed for floating emoji picker
     color: @text-color;
+
+    div[contenteditable] {
+      -webkit-user-modify: read-write !important;
+    }
+
+    // Slate's zero-width placeholder does not always give an empty block a line box,
+    // notably in the inline reply composer. Keep model-level blank lines visible just
+    // as they will be after the HTML serializer turns these blocks into <br> elements.
+    .empty-composer-block {
+      min-height: 1.4em;
+    }
   }
 }
 
 .RichEditor-root blockquote {
-  border-left: 2px solid #eee;
+  border-left: 2px solid @border-color-divider;
   color: mix(@text-color, purple, 50%);
   margin: 0;
   padding: 0 0 0 10px;
@@ -54,9 +66,11 @@
   color: @text-color-link;
   text-decoration: underline;
 }
+
 .RichEditor-root .custom-block,
 .RichEditor-root .uneditable.custom-block {
   border: 1px dashed transparent;
+
   &.focused {
     border: 1px dashed @text-color;
   }
@@ -69,21 +83,26 @@
   position: relative;
   white-space: normal;
   min-width: 30px;
+
   .uneditable-remove {
     position: absolute;
     display: none;
     right: -5px;
     top: -5px;
     z-index: 2;
+
     &:active {
       filter: brightness(85%);
     }
   }
+
   blockquote {
     color: mix(@text-color, purple, 50%);
   }
+
   &:hover {
     border: 1px dashed @border-color-divider;
+
     .uneditable-remove {
       display: initial;
     }
@@ -122,7 +141,7 @@
 
   button {
     cursor: pointer;
-    color: fadeout(mix(@btn-default-text-color, @component-active-color, 88%), 30%);
+    color: rgb(from color-mix(in srgb, @btn-default-text-color 88%, @component-active-color) r g b / 70%);
     padding: 4px 4.7px;
     border: none;
     background: none;
@@ -132,18 +151,21 @@
     max-width: 32px;
 
     &:hover {
-      color: fadeout(mix(@btn-default-text-color, @component-active-color, 88%), 5%);
+      color: rgb(from color-mix(in srgb, @btn-default-text-color 88%, @component-active-color) r g b / 95%);
       background: none;
     }
+
     &.with-select {
       max-width: 100px;
       white-space: nowrap;
+
       select {
         border: none;
         background: none;
         margin: 0;
         min-width: 72px;
         max-width: 92px;
+
         &:active,
         &:focus {
           background-color: @background-primary;
@@ -169,7 +191,8 @@
   .color-picker {
     display: inline-block;
     position: relative;
-    & > button {
+
+    &>button {
       cursor: pointer;
       width: 20px;
       height: 14px;
@@ -192,6 +215,7 @@
       padding: 5px;
       display: flex;
       flex-direction: row;
+
       button {
         max-width: 50px;
       }
@@ -206,9 +230,11 @@ body.platform-win32 {
     .composer-drop-cover {
       border-radius: 0;
     }
+
     .composer-action-bar-wrap {
       border-radius: 0;
     }
+
     input,
     input:focus {
       box-shadow: none;
@@ -261,6 +287,7 @@ body.platform-win32 {
       color: lighten(@gray, 20%);
       font-weight: 500;
       font-size: 1.1em;
+
       img {
         margin: auto;
         display: block;
@@ -295,15 +322,18 @@ body.platform-win32 {
       white-space: nowrap;
 
       img.content-mask {
-        background-color: fadeout(mix(@btn-default-text-color, @component-active-color, 88%), 30%);
+        background-color: rgb(from color-mix(in srgb, @btn-default-text-color 88%, @component-active-color) r g b / 70%);
       }
+
       &:hover {
         img.content-mask {
-          background-color: fadeout(mix(@btn-default-text-color, @component-active-color, 88%), 5%);
+          background-color: rgb(from color-mix(in srgb, @btn-default-text-color 88%, @component-active-color) r g b / 95%);
         }
       }
+
       &.btn-enabled {
         color: @component-active-color;
+
         img.content-mask {
           background-color: @component-active-color;
         }
@@ -353,6 +383,7 @@ body.platform-win32 {
         .composer-action-bar-plugins {
           opacity: 1;
         }
+
         .action-bar-cover {
           left: 100%;
         }
@@ -385,11 +416,13 @@ body.platform-win32 {
   .composer-body-wrap {
     padding: 0 0 5px 0;
   }
+
   .composer-header {
     .key-commands-region {
       height: initial;
     }
   }
+
   .composer-header-actions {
     position: relative;
     float: right;
@@ -400,22 +433,29 @@ body.platform-win32 {
 
     .action {
       color: @text-color-very-subtle;
+
       img.content-mask {
         background-color: @text-color-very-subtle;
       }
+
       font-size: @font-size-small;
       padding: 10px 6px;
+
       &:first-child {
         padding-left: @spacing-standard;
       }
+
       &:last-child {
         padding-right: 0;
       }
+
       &:hover {
         color: @text-color-link;
+
         img.content-mask {
           background-color: @text-color-link;
         }
+
         cursor: default;
       }
     }
@@ -432,11 +472,19 @@ body.platform-win32 {
     border: none;
   }
 
+  // Suppress the keyboard-navigation focus ring on composer header fields (To, From,
+  // Subject, etc.) — they have their own focused styling via the parent container.
+  input:focus-visible,
+  select:focus-visible {
+    outline: none;
+  }
+
   .composer-field-label {
     color: @text-color-very-subtle;
     float: left;
     padding-top: 13px;
     display: block;
+
     &:hover {
       cursor: default;
     }
@@ -464,9 +512,11 @@ body.platform-win32 {
       background-color: transparent;
       border: none;
       margin: 0;
+
       &::-webkit-input-placeholder {
         color: @text-color-very-subtle;
       }
+
       &:focus {
         box-shadow: none;
       }
@@ -475,6 +525,7 @@ body.platform-win32 {
 
   .compose-body-scroll {
     position: initial;
+
     .scroll-region-content .scroll-region-content-inner {
       min-height: 100%;
       display: flex;
@@ -499,6 +550,7 @@ body.platform-win32 {
         overflow: hidden;
         padding: 0;
       }
+
       .gmail_quote_attribution {
         height: 0;
         overflow: hidden;
@@ -522,10 +574,12 @@ body.platform-win32 {
         right: -6px;
         top: -6px;
         border-radius: 0 0 0 3px;
+
         &:active {
           background: none;
           filter: brightness(95%);
         }
+
         img {
           height: 24px;
         }
@@ -540,6 +594,7 @@ body.platform-win32 {
   .composer-footer-region {
     padding: 0 22px;
     cursor: default;
+
     &:hover {
       cursor: default;
     }
@@ -549,6 +604,29 @@ body.platform-win32 {
   .attachments-area {
     padding: 0;
     margin: 0 8px;
+  }
+}
+
+// Placeholder shown while a thread dragged onto the composer is being fetched
+// from the sync engine and written out as a .eml file. Indented to line up
+// with .nylas-attachment-item, which it sits alongside.
+.attaching-messages {
+  display: flex;
+  align-items: center;
+  margin: 0 0 @spacing-standard @spacing-standard;
+  color: @text-color-subtle;
+  font-size: @font-size-small;
+
+  .spinner {
+    width: auto;
+    margin-right: @spacing-half;
+
+    > div {
+      width: 6px;
+      height: 6px;
+      margin-right: 2px;
+      margin-left: 0;
+    }
   }
 }
 
@@ -595,38 +673,41 @@ body.platform-win32 {
       .btn.btn-toolbar.btn-trash {
         padding-right: 0;
       }
+
       .show-more-fade {
-        background: linear-gradient(
-          to right,
-          fade(@blurred-primary-color, 0%) 0%,
-          fade(@blurred-primary-color, 100%) 40%
-        );
+        background: linear-gradient(to right,
+            fade(@blurred-primary-color, 0%) 0%,
+            fade(@blurred-primary-color, 100%) 40%);
       }
+
       .composer-action-bar-wrap {
         @action-bar-bg: @blurred-off-primary-color;
         background: @action-bar-bg;
         .action-bar-cover-gen;
       }
+
       .RichEditor-toolbar .inner {
         background: @blurred-primary-color;
       }
     }
+
     .message-item-white-wrap.composer-outer-wrap.focused {
       box-shadow: 0 0 0.5px rgba(0, 0, 0, 0.28), 0 1px 1.5px rgba(0, 0, 0, 0.08),
         0 0 3px @accent-primary;
       background-color: @background-primary;
+
       .show-more-fade {
-        background: linear-gradient(
-          to right,
-          fade(@background-primary, 0%) 0%,
-          fade(@background-primary, 100%) 40%
-        );
+        background: linear-gradient(to right,
+            fade(@background-primary, 0%) 0%,
+            fade(@background-primary, 100%) 40%);
       }
+
       .composer-action-bar-wrap {
         @action-bar-bg: @background-off-primary;
         background: @action-bar-bg;
         .action-bar-cover-gen;
       }
+
       .RichEditor-toolbar .inner {
         background: @background-primary;
       }
@@ -647,22 +728,31 @@ body.platform-win32 {
   .tokenizing-field-wrap {
     padding: 0 22px;
   }
+
   .content-container {
     margin-left: 22px;
     width: calc(~'100% - 44px');
   }
+
   .button-dropdown {
     .content-container {
       margin-left: 0;
       width: 100%;
     }
   }
+
   &:after {
     .composer-field-bottom-border;
   }
 
   &.from-field {
     padding: 0 22px;
+  }
+
+  &.replyto-field {
+    .tokenizing-field-input {
+      margin-left: 5.5em;
+    }
   }
 
   .from-single-name {
@@ -680,15 +770,19 @@ body.platform-win32 {
     .only-item {
       line-height: 2em;
     }
+
     &:hover {
+
       .primary-item,
       .only-item {
         border-radius: @border-radius-base;
       }
     }
+
     .secondary-items {
       border-radius: @border-radius-base;
     }
+
     .item {
       .contact.is-alias {
         font-style: italic;
@@ -709,6 +803,7 @@ body.platform-win32 {
     .participant-primary {
       font-weight: @font-weight-semi-bold;
     }
+
     .participant-secondary {
       color: @text-color-very-subtle;
     }
@@ -739,6 +834,7 @@ body.platform-win32 {
     &:first-child {
       padding-left: 0.5em !important;
     }
+
     &.emoji-option,
     &:hover {
       background-color: @btn-emphasis-bg-color;
@@ -752,33 +848,41 @@ body.platform-win32 {
   width: 210px;
   height: 290px;
   overflow: hidden;
+
   .emoji-tabs {
     display: flex;
     flex-direction: row;
     padding: 5px 5px 5px 10px;
     border-bottom: 1px solid @border-color-primary;
     transition: box-shadow 0.5s;
+
     &.shadow {
       box-shadow: @standard-shadow;
     }
+
     .emoji-tab {
       background-color: @gray-light;
+
       &.active {
         background-color: @component-active-color;
       }
     }
   }
+
   .emoji-finder-container {
     height: 232px;
+
     .scrollbar-track {
       background: transparent;
       border-left: none;
       width: 10px;
     }
+
     .emoji-search-container {
       padding: @padding-base-vertical * 1.5 @padding-base-horizontal 0;
     }
   }
+
   .emoji-name {
     height: 25px;
     width: 192px;

@@ -1,10 +1,50 @@
 import moment, { Moment } from 'moment-timezone';
+import { localized } from './intl';
 
 // Init locale for moment
 moment.locale(navigator.language);
 
+/**
+ * The current IANA name of a zone: America/Indiana/Indianapolis for America/Indianapolis,
+ * Asia/Kolkata for Asia/Calcutta. The machine reports whatever name its zone is configured under,
+ * and every TZID this app writes for local time uses it. SabreDAV 4.7 (Baikal 0.10.1, measured
+ * 2026-10-09) resolves only current names and reads any other TZID as UTC in free/busy, despite
+ * the VTIMEZONE beside it.
+ *
+ * Current means listed in tzdata's zone.tab, as moment-timezone's metadata carries it. CLDR's
+ * names for the same location are tried first: tzdata links zones of different countries that
+ * share rules (Africa/Asmara to Africa/Nairobi), and only CLDR keeps them apart. Its list predates
+ * a few renames (Europe/Kyiv), which tzdata's links then supply. A name with no current zone
+ * (UTC, Etc/GMT+5) is returned unchanged.
+ */
+export function canonicalZoneName(name: string): string {
+  const current = require('moment-timezone/data/meta/latest.json').zones;
+  const isCurrent = (zone: string) => !!current[zone];
+  const sameLocation: string[] = require('windows-iana').findAlias(name) || [];
+  return sameLocation.find(isCurrent) || linkedZoneNames(name).find(isCurrent) || name;
+}
+
+// The name and every name tzdata links to it, directly or through another link.
+function linkedZoneNames(name: string): string[] {
+  const pairs: string[][] = require('moment-timezone/data/packed/latest.json').links.map(
+    (link: string) => link.split('|')
+  );
+  const group = new Set([name]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const [a, b] of pairs) {
+      if (group.has(a) !== group.has(b)) {
+        group.add(a);
+        group.add(b);
+        grew = true;
+      }
+    }
+  }
+  return [...group];
+}
+
 // Initialise moment timezone
-const tz = moment.tz.guess();
+const tz = canonicalZoneName(moment.tz.guess());
 if (!tz) {
   console.error('DateUtils: TimeZone could not be determined. This should not happen!');
 }
@@ -20,27 +60,30 @@ const Hours = {
 const Days = {
   // The value for next monday and next weekend varies depending if the current
   // day is saturday or sunday. See http://momentjs.com/docs/#/get-set/day/
-  NextMonday: day => (day === 0 ? 1 : 8),
-  ThisWeekend: day => (day === 6 ? 13 : 6),
+  NextMonday: (day: number) => (day === 0 ? 1 : 8),
+  ThisWeekend: (day: number) => (day === 6 ? 13 : 6),
 };
 
-function oclock(momentDate) {
+function oclock(momentDate: Moment) {
   return momentDate.minute(0).second(0);
 }
 
-function morning(momentDate, morningHour = Hours.Morning) {
+function morning(momentDate: Moment, morningHour = Hours.Morning) {
   return oclock(momentDate.hour(morningHour));
 }
 
-function evening(momentDate, eveningHour = Hours.Evening) {
+function evening(momentDate: Moment, eveningHour = Hours.Evening) {
   return oclock(momentDate.hour(eveningHour));
 }
 
-function midnight(momentDate, midnightHour = Hours.Midnight) {
+function midnight(momentDate: Moment, midnightHour = Hours.Midnight) {
   return oclock(momentDate.hour(midnightHour));
 }
 
-function isPastDate(inputDateObj, currentDate) {
+function isPastDate(
+  inputDateObj: { month: number; [key: string]: unknown },
+  currentDate: Date | Moment | string
+) {
   const inputMoment = moment({ ...inputDateObj, month: inputDateObj.month - 1 });
   const currentMoment = moment(currentDate);
 
@@ -64,33 +107,33 @@ function getChronoFuture() {
   }
 
   const chrono = getChrono();
-  const EnforceFutureDate = new chrono.Refiner();
-  EnforceFutureDate.refine = (text, results) => {
-    results.forEach(result => {
-      const current = Object.assign({}, result.start.knownValues, result.start.impliedValues);
 
-      if (result.start.isCertain('weekday') && !result.start.isCertain('day')) {
-        if (isPastDate(current, result.ref)) {
-          result.start.imply('day', result.start.impliedValues.day + 7);
-        }
-      }
+  _chronoFuture = chrono.casual.clone();
+  _chronoFuture.refiners.push({
+    refine: (text, results) => {
+      results.forEach((result) => {
+        const current = Object.assign({}, result.start.knownValues, result.start.impliedValues);
 
-      if (result.start.isCertain('day') && !result.start.isCertain('month')) {
-        if (isPastDate(current, result.ref)) {
-          result.start.imply('month', result.start.impliedValues.month + 1);
+        if (result.start.isCertain('weekday') && !result.start.isCertain('day')) {
+          if (isPastDate(current, result.ref)) {
+            result.start.imply('day', result.start.impliedValues.day + 7);
+          }
         }
-      }
-      if (result.start.isCertain('month') && !result.start.isCertain('year')) {
-        if (isPastDate(current, result.ref)) {
-          result.start.imply('year', result.start.impliedValues.year + 1);
-        }
-      }
-    });
-    return results;
-  };
 
-  _chronoFuture = new chrono.Chrono(chrono.options.casualOption());
-  _chronoFuture.refiners.push(EnforceFutureDate);
+        if (result.start.isCertain('day') && !result.start.isCertain('month')) {
+          if (isPastDate(current, result.ref)) {
+            result.start.imply('month', result.start.impliedValues.month + 1);
+          }
+        }
+        if (result.start.isCertain('month') && !result.start.isCertain('year')) {
+          if (isPastDate(current, result.ref)) {
+            result.start.imply('year', result.start.impliedValues.year + 1);
+          }
+        }
+      });
+      return results;
+    },
+  });
   return _chronoFuture;
 }
 
@@ -100,37 +143,43 @@ function getChronoPast() {
   }
 
   const chrono = getChrono();
-  const EnforcePastDate = new chrono.Refiner();
-  EnforcePastDate.refine = (text, results) => {
-    results.forEach(result => {
-      const current = Object.assign({}, result.start.knownValues, result.start.impliedValues);
 
-      if (result.start.isCertain('weekday') && !result.start.isCertain('day')) {
-        if (!isPastDate(current, result.ref)) {
-          result.start.imply('day', result.start.impliedValues.day - 7);
-        }
-      }
+  _chronoPast = chrono.casual.clone();
+  _chronoPast.refiners.push({
+    refine: (text, results) => {
+      results.forEach((result) => {
+        const current = Object.assign({}, result.start.knownValues, result.start.impliedValues);
 
-      if (result.start.isCertain('day') && !result.start.isCertain('month')) {
-        if (!isPastDate(current, result.ref)) {
-          result.start.imply('month', result.start.impliedValues.month - 1);
+        if (result.start.isCertain('weekday') && !result.start.isCertain('day')) {
+          if (!isPastDate(current, result.ref)) {
+            result.start.imply('day', result.start.impliedValues.day - 7);
+          }
         }
-      }
-      if (result.start.isCertain('month') && !result.start.isCertain('year')) {
-        if (!isPastDate(current, result.ref)) {
-          result.start.imply('year', result.start.impliedValues.year - 1);
-        }
-      }
-    });
-    return results;
-  };
 
-  _chronoPast = new chrono.Chrono(chrono.options.casualOption());
-  _chronoPast.refiners.push(EnforcePastDate);
+        if (result.start.isCertain('day') && !result.start.isCertain('month')) {
+          if (!isPastDate(current, result.ref)) {
+            result.start.imply('month', result.start.impliedValues.month - 1);
+          }
+        }
+        if (result.start.isCertain('month') && !result.start.isCertain('year')) {
+          if (!isPastDate(current, result.ref)) {
+            result.start.imply('year', result.start.impliedValues.year - 1);
+          }
+        }
+      });
+      return results;
+    },
+  });
   return _chronoPast;
 }
 
 function expandDateLikeString(dateLikeString: string) {
+  // Short format: 123 => 1:23 or 1234 => 12:34
+  if (/^\d{3,4}$/.test(dateLikeString)) {
+    const len = dateLikeString.length;
+    dateLikeString = dateLikeString.slice(0, len - 2) + ':' + dateLikeString.slice(len - 2); // Insert colon
+  }
+
   // Short format: 2h
   if (/^\d+h$/.test(dateLikeString)) {
     const numHours = dateLikeString.match(/^\d+/)[0]; // Extract number
@@ -176,16 +225,10 @@ const DateUtils = {
   // Localized format: ddd, MMM D, YYYY h:mmA
   DATE_FORMAT_LONG: 'llll',
 
-  DATE_FORMAT_LONG_NO_YEAR: moment
-    .localeData()
-    .longDateFormat('llll')
-    .replace(yearRegex, ''),
+  DATE_FORMAT_LONG_NO_YEAR: moment.localeData().longDateFormat('llll').replace(yearRegex, ''),
 
   // Localized format: MMM D, h:mmA
-  DATE_FORMAT_SHORT: moment
-    .localeData()
-    .longDateFormat('lll')
-    .replace(yearRegex, ''),
+  DATE_FORMAT_SHORT: moment.localeData().longDateFormat('lll').replace(yearRegex, ''),
 
   DATE_FORMAT_llll_NO_TIME: moment
     .localeData()
@@ -268,9 +311,7 @@ const DateUtils = {
 
   getChronoPast,
 
-  parseDateString(
-    dateLikeString: string
-  ): {
+  parseDateString(dateLikeString: string): {
     leftoverText: string;
     start: Moment;
     end: Moment;
@@ -282,7 +323,7 @@ const DateUtils = {
     const results = { start: moment(now), end: moment(now), leftoverText: dateLikeString };
     for (const item of parsed) {
       for (const val of ['start', 'end']) {
-        if (!(val in item)) {
+        if (!item[val]) {
           continue;
         }
         const { day: knownDay, weekday: knownWeekday, hour: knownHour } = item[val].knownValues;
@@ -309,7 +350,7 @@ const DateUtils = {
           results[val].month(month - 1); // moment zero-indexes month
           results[val].date(day);
 
-          if (!gotTime) {
+          if (!gotTime[val]) {
             results[val].hour(hour);
             results[val].minute(minute);
           }
@@ -461,6 +502,26 @@ const DateUtils = {
       weekday: 'long',
       second: undefined,
     });
+  },
+
+  /** How long something lasts or took: "3d 4h", "2h 15m", "12m", "< 1m". */
+  formatDuration(seconds: number) {
+    const MINUTE = 60;
+    const HOUR = 60 * MINUTE;
+    const DAY = 24 * HOUR;
+    if (seconds < MINUTE) {
+      return localized('< 1m');
+    }
+    const days = Math.floor(seconds / DAY);
+    const hours = Math.floor((seconds % DAY) / HOUR);
+    const minutes = Math.floor((seconds % HOUR) / MINUTE);
+    if (days > 0) {
+      return hours > 0 ? localized('%@d %@h', days, hours) : localized('%@d', days);
+    }
+    if (hours > 0) {
+      return minutes > 0 ? localized('%@h %@m', hours, minutes) : localized('%@h', hours);
+    }
+    return localized('%@m', minutes);
   },
 };
 

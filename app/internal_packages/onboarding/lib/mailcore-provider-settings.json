@@ -17,9 +17,9 @@
       ],
       "smtp": [
         {
-          "port": 587,
+          "port": 465,
           "hostname": "smtp.pobox.com",
-          "starttls": true
+          "ssl": true
         }
       ]
     },
@@ -87,17 +87,7 @@
       ],
       "smtp": [
         {
-          "port": 587,
-          "hostname": "smtp.mail.com",
-          "ssl": true
-        },
-        {
           "port": 465,
-          "hostname": "smtp.mail.com",
-          "ssl": true
-        },
-        {
-          "port": 25,
           "hostname": "smtp.mail.com",
           "ssl": true
         }
@@ -356,14 +346,14 @@
       ],
       "smtp": [
         {
-          "port": 587,
-          "hostname": "smtp.aol.com",
-          "starttls": true
-        },
-        {
           "port": 465,
           "hostname": "smtp.aol.com",
           "ssl": true
+        },
+        {
+          "port": 587,
+          "hostname": "smtp.aol.com",
+          "starttls": true
         },
         {
           "port": 25,
@@ -481,7 +471,8 @@
       "alt2\\.gmail-smtp-in\\.l\\.google\\.com",
       "alt3\\.gmail-smtp-in\\.l\\.google\\.com",
       "alt4\\.gmail-smtp-in\\.l\\.google\\.com",
-      "gmail-smtp-in\\.l\\.google\\.com"
+      "gmail-smtp-in\\.l\\.google\\.com",
+      "smtp\\.google\\.com"
     ],
     "domain-match": ["googlemail\\.com", "gmail\\.com"],
     "mailboxes": {
@@ -964,9 +955,9 @@
     "servers": {
       "imap": [
         {
-          "port": 143,
+          "port": 993,
           "hostname": "imap.openmailbox.org",
-          "starttls": true
+          "ssl": true
         }
       ],
       "smtp": [
@@ -989,11 +980,6 @@
   "mailru": {
     "servers": {
       "imap": [
-        {
-          "port": 143,
-          "hostname": "imap.mail.ru",
-          "starttls": true
-        },
         {
           "port": 993,
           "hostname": "imap.mail.ru",

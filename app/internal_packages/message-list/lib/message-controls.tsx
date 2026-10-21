@@ -3,14 +3,16 @@
 import React from 'react';
 import {
   localized,
-  PropTypes,
   Actions,
   TaskQueue,
   GetMessageRFC2822Task,
+  EmlUtils,
   Thread,
   Message,
+  ComponentRegistry,
 } from 'mailspring-exports';
 import { RetinaImg, ButtonDropdown, Menu } from 'mailspring-component-kit';
+import { developerToolsAvailable } from '../../../src/developer-tools';
 
 interface MessageControlsProps {
   thread: Thread;
@@ -19,10 +21,6 @@ interface MessageControlsProps {
 
 export default class MessageControls extends React.Component<MessageControlsProps> {
   static displayName = 'MessageControls';
-  static propTypes = {
-    thread: PropTypes.object.isRequired,
-    message: PropTypes.object.isRequired,
-  };
 
   _items() {
     const reply = {
@@ -56,8 +54,8 @@ export default class MessageControls extends React.Component<MessageControlsProp
       : [reply, replyAll, forward, showOriginal];
   }
 
-  _dropdownMenu(items) {
-    const itemContent = item => (
+  _dropdownMenu(items: Array<{ name: string; image: string; select: () => void }>) {
+    const itemContent = (item: { name: string; image: string; select: () => void }) => (
       <span>
         <RetinaImg name={item.image} mode={RetinaImg.Mode.ContentIsMask} />
         &nbsp;&nbsp;{item.name}&nbsp;&nbsp;
@@ -67,9 +65,9 @@ export default class MessageControls extends React.Component<MessageControlsProp
     return (
       <Menu
         items={items}
-        itemKey={item => item.name}
+        itemKey={(item) => item.name}
         itemContent={itemContent}
-        onSelect={item => item.select()}
+        onSelect={(item) => item.select()}
       />
     );
   }
@@ -99,6 +97,25 @@ export default class MessageControls extends React.Component<MessageControlsProp
     Actions.composeForward({ thread, message });
   };
 
+  _onDownloadEml = () => {
+    const { message } = this.props;
+    const defaultFilename = EmlUtils.defaultEmlFilename(message.subject);
+
+    AppEnv.showSaveDialog(
+      { defaultPath: defaultFilename, title: localized('Save Email') },
+      async (savePath: string) => {
+        if (!savePath) return;
+        const task = new GetMessageRFC2822Task({
+          messageId: message.id,
+          accountId: message.accountId,
+          filepath: savePath,
+        });
+        Actions.queueTask(task);
+        await TaskQueue.waitForPerformRemote(task);
+      }
+    );
+  };
+
   _onShowActionsMenu = () => {
     const SystemMenu = require('@electron/remote').Menu;
     const SystemMenuItem = require('@electron/remote').MenuItem;
@@ -116,12 +133,33 @@ export default class MessageControls extends React.Component<MessageControlsProp
         click: this._onCopyToClipboard,
       })
     );
+    menu.append(new SystemMenuItem({ type: 'separator' }));
+    menu.append(
+      new SystemMenuItem({ label: localized('Download as .eml'), click: this._onDownloadEml })
+    );
+
+    const actionItems = ComponentRegistry.findComponentsMatching({
+      role: 'MessageActionMenuItem',
+    }) as Array<{
+      getMenuItem: (props: MessageControlsProps) => { label: string; click: () => void };
+    }>;
+    if (actionItems.length > 0) {
+      menu.append(new SystemMenuItem({ type: 'separator' }));
+      for (const ActionItem of actionItems) {
+        const item = ActionItem.getMenuItem(this.props);
+        menu.append(new SystemMenuItem({ label: item.label, click: item.click }));
+      }
+    }
+
     menu.popup({});
   };
 
   _onShowOriginal = async () => {
     const { message } = this.props;
-    const filepath = require('path').join(require('@electron/remote').app.getPath('temp'), message.id);
+    const filepath = require('path').join(
+      require('@electron/remote').app.getPath('temp'),
+      message.id
+    );
     const task = new GetMessageRFC2822Task({
       messageId: message.id,
       accountId: message.accountId,
@@ -129,6 +167,17 @@ export default class MessageControls extends React.Component<MessageControlsProp
     });
     Actions.queueTask(task);
     await TaskQueue.waitForPerformRemote(task);
+
+    // The task can reach "complete" status even when it failed remotely (eg.
+    // the message could not be fetched from the server), in which case the
+    // file is never written. Verify it exists before trying to display it.
+    if (!require('fs').existsSync(filepath)) {
+      AppEnv.showErrorDialog(
+        localized('Could not retrieve the original message. Please try again.')
+      );
+      return;
+    }
+
     const { BrowserWindow } = require('@electron/remote');
     const win = new BrowserWindow({
       width: 800,
@@ -137,9 +186,12 @@ export default class MessageControls extends React.Component<MessageControlsProp
       webPreferences: {
         javascript: false,
         nodeIntegration: false,
+        devTools: developerToolsAvailable(),
       },
     });
-    win.loadURL(`file://${filepath}`);
+    win.loadURL(`file://${filepath}`).catch((err: Error) => {
+      console.error('Show Original window failed to load:', err);
+    });
   };
 
   _onLogData = () => {
@@ -151,7 +203,6 @@ export default class MessageControls extends React.Component<MessageControlsProp
 
   _onCopyToClipboard = () => {
     const { message, thread } = this.props;
-    const clipboard = require('electron').clipboard;
     const data = `
       AccountID: ${message.accountId}
       Message ID: ${message.id}
@@ -159,13 +210,13 @@ export default class MessageControls extends React.Component<MessageControlsProp
       Thread ID: ${thread.id}
       Thread Metadata: ${JSON.stringify(thread.pluginMetadata, null, '  ')}
     `;
-    clipboard.writeText(data);
+    require('@electron/remote').clipboard.writeText(data);
   };
 
   render() {
     const items = this._items();
     return (
-      <div className="message-actions-wrap" onClick={e => e.stopPropagation()}>
+      <div className="message-actions-wrap" onClick={(e) => e.stopPropagation()}>
         <ButtonDropdown
           primaryItem={<RetinaImg name={items[0].image} mode={RetinaImg.Mode.ContentIsMask} />}
           primaryTitle={items[0].name}
@@ -173,8 +224,22 @@ export default class MessageControls extends React.Component<MessageControlsProp
           closeOnMenuClick
           menu={this._dropdownMenu(items.slice(1))}
         />
-        <div className="message-actions-ellipsis" onClick={this._onShowActionsMenu}>
-          <RetinaImg name={'message-actions-ellipsis.png'} mode={RetinaImg.Mode.ContentIsMask} />
+        <div
+          className="message-actions-ellipsis"
+          tabIndex={-1}
+          onClick={this._onShowActionsMenu}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              this._onShowActionsMenu();
+            }
+          }}
+        >
+          <RetinaImg
+            name={'message-actions-ellipsis.png'}
+            mode={RetinaImg.Mode.ContentIsMask}
+            aria-hidden="true"
+          />
         </div>
       </div>
     );

@@ -5,16 +5,13 @@ import {
   MessageViewExtension,
   ExtensionRegistry,
   ComponentRegistry,
+  DatabaseStore,
 } from 'mailspring-exports';
 import { EventHeader } from './event-header';
+import { bestICSAttachment } from './ics-attachment';
+import { InvitationCalendarRefresh } from './invitation-calendar-refresh';
 
-function bestICSAttachment(files: File[]) {
-  return (
-    files.find(f => f.filename.endsWith('.ics')) ||
-    files.find(f => f.contentType === 'text/calendar') ||
-    files.find(f => f.filename.endsWith('.vcs'))
-  );
-}
+let stopRefreshingOnInvitations: (() => void) | null = null;
 
 const EventHeaderContainer: React.FunctionComponent<{ message: Message }> = ({ message }) => {
   const icsFile = bestICSAttachment(message.files);
@@ -32,7 +29,7 @@ class HideICSAttachmentExtension extends MessageViewExtension {
     // to ensure it's recognized everywhere, so we remove all the attachments with the exact
     // file size and an ics content type.
     return files.filter(
-      f => !(f.size === best.size && ['application/ics', 'text/calendar'].includes(f.contentType))
+      (f) => !(f.size === best.size && ['application/ics', 'text/calendar'].includes(f.contentType))
     );
   }
 }
@@ -40,9 +37,17 @@ class HideICSAttachmentExtension extends MessageViewExtension {
 export function activate() {
   ExtensionRegistry.MessageView.register(HideICSAttachmentExtension);
   ComponentRegistry.register(EventHeaderContainer, { role: 'message:BodyHeader' });
+  // Every window sees each delta, so only the main window refreshes, once per invitation.
+  if (AppEnv.isMainWindow()) {
+    const refresher = new InvitationCalendarRefresh((accountId) =>
+      AppEnv.mailsyncBridge.sendSyncCalendarNow(accountId)
+    );
+    stopRefreshingOnInvitations = DatabaseStore.listen(refresher.onDatabaseChanged);
+  }
 }
 
 export function deactivate() {
   ExtensionRegistry.MessageView.unregister(HideICSAttachmentExtension);
   ComponentRegistry.unregister(EventHeaderContainer);
+  stopRefreshingOnInvitations?.();
 }

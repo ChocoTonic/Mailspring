@@ -24,6 +24,16 @@ export default {
           },
         },
       },
+      appearance: {
+        type: 'object',
+        properties: {
+          useSystemAccent: {
+            type: 'boolean',
+            default: true,
+            title: localized('Use system accent color'),
+          },
+        },
+      },
       workspace: {
         type: 'object',
         properties: {
@@ -36,9 +46,22 @@ export default {
             type: 'boolean',
             default: true,
             title: localized('Show icon in menu bar / system tray'),
-            note: localized(
-              'On Linux you need to restart Mailspring for the tray icon to disappear.'
-            ),
+            note:
+              process.platform === 'linux'
+                ? localized(
+                    'On Linux you need to restart Mailspring for the tray icon to disappear.'
+                  )
+                : undefined,
+          },
+          trayIconStyle: {
+            type: 'string',
+            default: 'blue',
+            enum: ['blue', 'red', 'none'],
+          },
+          traySystemTheme: {
+            type: 'string',
+            default: 'automatic',
+            enum: ['automatic', 'light', 'dark'],
           },
           showImportant: {
             type: 'boolean',
@@ -54,6 +77,11 @@ export default {
             type: 'boolean',
             default: false,
             title: localized('Use 24-hour clock'),
+          },
+          menubarStyle: {
+            type: 'string',
+            default: 'hamburger',
+            enum: ['default', 'autohide', 'hamburger'],
           },
           interfaceZoom: {
             title: localized('Override standard interface scaling'),
@@ -136,10 +164,22 @@ export default {
             default: false,
             title: localized('Move to trash (not archive) on swipe / backspace'),
           },
+          swipeDisabled: {
+            type: 'boolean',
+            default: false,
+            title: localized('Disable swipe gestures on the thread list'),
+          },
           descendingOrderMessageList: {
             type: 'boolean',
             default: false,
             title: localized('Display conversations in descending chronological order'),
+          },
+          emailRenderMode: {
+            type: 'string',
+            default: 'light',
+            enum: ['light', 'dark'],
+            enumLabels: [localized('Light email mode'), localized('Dark email mode')],
+            title: localized('Email body appearance'),
           },
         },
       },
@@ -152,13 +192,18 @@ export default {
             title: localized('Enable rich text and advanced editor features'),
             note: localized(
               'Many features are unavailable in plain-text mode. To create a single ' +
-              'plain-text draft, hold Alt or Option while clicking Compose or Reply.'
+                'plain-text draft, hold Alt or Option while clicking Compose or Reply.'
             ),
           },
           spellcheck: {
             type: 'boolean',
             default: true,
             title: localized('Check messages for spelling'),
+          },
+          grammarCheck: {
+            type: 'boolean',
+            default: false,
+            title: localized('Check messages for grammar'),
           },
           spellcheckDefaultLanguage: {
             type: 'string',
@@ -246,9 +291,7 @@ export default {
               'Vietnamese',
             ],
             title: localized('Spellcheck language'),
-            note: localized(
-              'Windows and Linux only - on macOS, the spellcheck language is detected by the system as you type.'
-            ),
+            platforms: ['win32', 'linux'],
           },
         },
       },
@@ -334,6 +377,11 @@ export default {
               localized('Show Total Count'),
             ],
             title: localized('Show badge on the app icon'),
+          },
+          countBadgeAllAccounts: {
+            type: 'boolean',
+            default: false,
+            title: localized('Count unread messages in all accounts, not just the selected folder'),
           },
         },
       },

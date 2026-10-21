@@ -6,7 +6,7 @@ import {
   localizedReactFragment,
   IIdentity,
 } from 'mailspring-exports';
-import { OpenIdentityPageButton, BillingModal, RetinaImg } from 'mailspring-component-kit';
+import { OpenIdentityPageButton, RetinaImg } from 'mailspring-component-kit';
 import { shell, ipcRenderer } from 'electron';
 
 class RefreshButton extends React.Component<Record<string, unknown>, { refreshing: boolean }> {
@@ -47,7 +47,7 @@ class RefreshButton extends React.Component<Record<string, unknown>, { refreshin
 
 const ProTourFeatures = [
   {
-    link: 'https://community.getmailspring.com/t/add-reminders-to-sent-messages/157',
+    link: 'https://getmailspring.com/docs/add-reminders-to-sent-messages',
     icon: `icon-composer-reminders.png`,
     title: localized(`Follow-up reminders`),
     text: localized(
@@ -55,7 +55,7 @@ const ProTourFeatures = [
     ),
   },
   {
-    link: 'https://community.getmailspring.com/t/view-contact-and-company-profiles/159',
+    link: 'https://getmailspring.com/docs/view-contact-and-company-profiles',
     icon: `toolbar-person-sidebar.png`,
     title: localized(`Rich contact profiles`),
     text: localized(
@@ -63,8 +63,7 @@ const ProTourFeatures = [
     ),
   },
   {
-    link:
-      'https://community.getmailspring.com/t/read-receipts-link-tracking-and-activity-reports/162',
+    link: 'https://getmailspring.com/docs/read-receipts-link-tracking-and-activity-reports',
     icon: `icon-composer-eye.png`,
     title: localized(`Read Receipts`),
     text: localized(
@@ -72,7 +71,7 @@ const ProTourFeatures = [
     ),
   },
   {
-    link: 'https://community.getmailspring.com/t/reply-faster-with-email-templates/167',
+    link: 'https://getmailspring.com/docs/reply-faster-with-email-templates',
     icon: `toolbar-templates.png`,
     title: localized(`Mail Templates`),
     text: localized(
@@ -80,8 +79,7 @@ const ProTourFeatures = [
     ),
   },
   {
-    link:
-      'https://community.getmailspring.com/t/read-receipts-link-tracking-and-activity-reports/162',
+    link: 'https://getmailspring.com/docs/read-receipts-link-tracking-and-activity-reports',
     icon: `icon-composer-linktracking.png`,
     title: localized(`Link tracking`),
     text: localized(
@@ -89,7 +87,7 @@ const ProTourFeatures = [
     ),
   },
   {
-    link: 'https://community.getmailspring.com/t/schedule-messages-to-send-later/158',
+    link: 'https://getmailspring.com/docs/schedule-messages-to-send-later',
     icon: `icon-composer-sendlater.png`,
     title: localized(`Send Later`),
     text: localized(
@@ -97,7 +95,7 @@ const ProTourFeatures = [
     ),
   },
   {
-    link: 'https://community.getmailspring.com/t/view-contact-and-company-profiles/159',
+    link: 'https://getmailspring.com/docs/view-contact-and-company-profiles',
     icon: `icon-composer-reminders.png`,
     title: localized(`Company overviews`),
     text: localized(
@@ -105,7 +103,7 @@ const ProTourFeatures = [
     ),
   },
   {
-    link: 'https://community.getmailspring.com/t/snooze-emails-to-handle-them-later/161',
+    link: 'https://getmailspring.com/docs/snooze-emails-to-handle-them-later',
     icon: `toolbar-snooze.png`,
     title: localized(`Snooze messages`),
     text: localized(
@@ -113,8 +111,7 @@ const ProTourFeatures = [
     ),
   },
   {
-    link:
-      'https://community.getmailspring.com/t/read-receipts-link-tracking-and-activity-reports/162',
+    link: 'https://getmailspring.com/docs/read-receipts-link-tracking-and-activity-reports',
     icon: `icon-toolbar-activity.png`,
     title: localized(`Mailbox insights`),
     text: localized(
@@ -122,7 +119,7 @@ const ProTourFeatures = [
     ),
   },
   {
-    link: 'https://community.getmailspring.com/t/automatically-translate-incoming-email/166',
+    link: 'https://getmailspring.com/docs/automatically-translate-incoming-email',
     icon: `pro-feature-translation.png`,
     title: localized(`Automatic Translation`),
     text: localized(
@@ -159,14 +156,6 @@ class PreferencesIdentity extends React.Component<
       identity: IdentityStore.identity(),
     };
   }
-
-  _onUpgrade = () => {
-    Actions.openModal({
-      component: <BillingModal source="preferences" />,
-      width: BillingModal.IntrinsicWidth,
-      height: BillingModal.IntrinsicHeight,
-    });
-  };
 
   _onLinkIdentity = () => {
     ipcRenderer.send('command', 'application:add-identity');
@@ -209,12 +198,14 @@ class PreferencesIdentity extends React.Component<
               `You are using %@, which is free! You can try pro features like snooze, send later, read receipts and reminders a few times a week.`,
               <strong>{localized('Mailspring Basic')}</strong>
             )}
-            <span className="platform-linux-only">
-              {localizedReactFragment(
-                `Mailspring is independent %@ software, and subscription revenue allows us spend time maintaining and improving the product.`,
-                <a href="https://github.com/Foundry376/Mailspring/">{localized('open source')}</a>
-              )}
-            </span>
+            {process.platform === 'linux' && (
+              <span>
+                {localizedReactFragment(
+                  `Mailspring is independent %@ software, and subscription revenue allows us spend time maintaining and improving the product.`,
+                  <a href="https://github.com/Foundry376/Mailspring/">{localized('open source')}</a>
+                )}
+              </span>
+            )}
             <br />
             <br />
             {localizedReactFragment(
@@ -229,14 +220,14 @@ class PreferencesIdentity extends React.Component<
               <div className="price">$8</div>
               <div className="period">{localized('Monthly')}</div>
             </div>
-            <div
-              className="btn btn-emphasis"
-              onClick={this._onUpgrade}
-              style={{ verticalAlign: 'top' }}
-            >
-              <RetinaImg name="ic-upgrade.png" mode={RetinaImg.Mode.ContentIsMask} />{' '}
-              {localized(`Get Mailspring Pro`)}
-            </div>
+            <OpenIdentityPageButton
+              label={localized('Get Mailspring Pro')}
+              path="/payment"
+              source="Preferences Billing"
+              campaign="Dashboard"
+              img="ic-upgrade.png"
+              isCTA={true}
+            />
           </div>
         </div>
         <ExploreMailspringPro />
@@ -244,7 +235,7 @@ class PreferencesIdentity extends React.Component<
     );
   }
 
-  _renderPaidPlan(planName, effectivePlanName) {
+  _renderPaidPlan(planName: string, effectivePlanName: string) {
     const planDisplayName = planName.replace('Annual', ` (${localized('annual')})`);
 
     const unpaidNote = effectivePlanName !== planName && (
@@ -263,7 +254,7 @@ class PreferencesIdentity extends React.Component<
             <strong
               style={{ textTransform: 'capitalize' }}
             >{`Mailspring ${planDisplayName}`}</strong>,
-            <a href="https://community.getmailspring.com/docs?topic=241">
+            <a href="https://getmailspring.com/docs/quick-start-guide">
               {localized(`Help Center`)}
             </a>
           )}
@@ -294,8 +285,8 @@ class PreferencesIdentity extends React.Component<
           {!stripePlan
             ? this._renderNoIdentity()
             : stripePlan === 'Basic'
-            ? this._renderBasicPlan()
-            : this._renderPaidPlan(stripePlan, identity.stripePlanEffective)}
+              ? this._renderBasicPlan()
+              : this._renderPaidPlan(stripePlan, identity.stripePlanEffective)}
         </div>
       </div>
     );
@@ -395,7 +386,7 @@ const ExploreMailspringPro: React.FunctionComponent = () => (
   <>
     <div className="feature-explore-title">{localized('Explore Mailspring Pro')}</div>
     <div className="feature-explore-grid">
-      {ProTourFeatures.map(item => (
+      {ProTourFeatures.map((item) => (
         <a key={item.title} className="feature" href={item.link}>
           <div className="popout">
             <RetinaImg name="thread-popout.png" mode={RetinaImg.Mode.ContentDark} />
@@ -415,7 +406,7 @@ const ExploreMailspringPro: React.FunctionComponent = () => (
   </>
 );
 
-const IdentitySummary: React.FunctionComponent<{ identity: IIdentity }> = props => {
+const IdentitySummary: React.FunctionComponent<{ identity: IIdentity }> = (props) => {
   const { firstName, lastName, emailAddress } = props.identity;
   const logout = () => Actions.logoutMailspringIdentity();
   return (

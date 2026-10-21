@@ -1,5 +1,4 @@
 import React from 'react';
-import PropTypes from 'prop-types';
 import {
   Thread,
   Message,
@@ -37,19 +36,9 @@ interface MessageItemState {
 export default class MessageItem extends React.Component<MessageItemProps, MessageItemState> {
   static displayName = 'MessageItem';
 
-  static propTypes = {
-    thread: PropTypes.object.isRequired,
-    message: PropTypes.object.isRequired,
-    messages: PropTypes.array.isRequired,
-    collapsed: PropTypes.bool,
-    pending: PropTypes.bool,
-    isMostRecent: PropTypes.bool,
-    className: PropTypes.string,
-  };
-
   _headerEl: HTMLElement;
 
-  constructor(props, context) {
+  constructor(props: MessageItemProps, context: object) {
     super(props, context);
 
     const fileIds = this.props.message.fileIds();
@@ -68,7 +57,7 @@ export default class MessageItem extends React.Component<MessageItemProps, Messa
     this._storeUnlisten = AttachmentStore.listen(this._onDownloadStoreChange);
   }
 
-  shouldComponentUpdate(nextProps, nextState) {
+  shouldComponentUpdate(nextProps: MessageItemProps, nextState: MessageItemState) {
     return !Utils.isEqualReact(nextProps, this.props) || !Utils.isEqualReact(nextState, this.state);
   }
 
@@ -91,7 +80,7 @@ export default class MessageItem extends React.Component<MessageItemProps, Messa
     return;
   };
 
-  _onClickHeader = e => {
+  _onClickHeader = (e: React.MouseEvent<HTMLElement>) => {
     this._onToggleCollapsed();
   };
 
@@ -134,7 +123,7 @@ export default class MessageItem extends React.Component<MessageItemProps, Messa
     const { files = [], body, id } = this.props.message;
     const { filePreviewPaths, downloads } = this.state;
     let attachedFiles = files.filter(
-      f => !f.contentId || !(body || '').includes(`cid:${f.contentId}`)
+      (f) => !f.contentId || !(body || '').includes(`cid:${f.contentId}`)
     );
 
     for (const extension of MessageStore.extensions()) {
@@ -185,7 +174,7 @@ export default class MessageItem extends React.Component<MessageItemProps, Messa
 
     return (
       <header
-        ref={el => (this._headerEl = el)}
+        ref={(el) => (this._headerEl = el)}
         className={`message-header ${pending && 'pending'}`}
         onClick={this._onClickHeader}
       >
@@ -222,7 +211,7 @@ export default class MessageItem extends React.Component<MessageItemProps, Messa
           to={message.to}
           cc={message.cc}
           bcc={message.bcc}
-          replyTo={message.replyTo.filter(c => !message.from.find(fc => fc.email === c.email))}
+          replyTo={message.replyTo.filter((c) => !message.from.find((fc) => fc.email === c.email))}
           onClick={this._onClickParticipants}
           isDetailed={this.state.detailedHeaders}
         />
@@ -242,7 +231,7 @@ export default class MessageItem extends React.Component<MessageItemProps, Messa
         <div
           className="header-toggle-control"
           style={{ top: 18, left: -14 }}
-          onClick={e => {
+          onClick={(e) => {
             this.setState({ detailedHeaders: false });
             e.stopPropagation();
           }}
@@ -259,7 +248,7 @@ export default class MessageItem extends React.Component<MessageItemProps, Messa
       <div
         className="header-toggle-control inactive"
         style={{ top: 18 }}
-        onClick={e => {
+        onClick={(e) => {
           this.setState({ detailedHeaders: true });
           e.stopPropagation();
         }}
@@ -289,15 +278,21 @@ export default class MessageItem extends React.Component<MessageItemProps, Messa
       return false;
     }
 
-    const folder = this.props.message.folder;
-    if (!folder || folder.role === 'al') {
+    const folders = this.props.message.categories().filter((f) => f.role !== 'all');
+    if (folders.length === 0) {
       return false;
     }
 
     return (
       <div className="header-row">
         <div className="header-label">{localized('Folder')}:&nbsp;</div>
-        <div className="header-name">{folder.displayName}</div>
+        <div className="header-name">
+          {folders.map((f) => (
+            <span key={f.id} className="message-folder-chip">
+              {f.displayName}
+            </span>
+          ))}
+        </div>
       </div>
     );
   }
@@ -342,8 +337,15 @@ export default class MessageItem extends React.Component<MessageItemProps, Messa
   }
 
   _renderFull() {
+    const senderName =
+      this.props.message.from && this.props.message.from[0]
+        ? this.props.message.from[0].displayName()
+        : localized('Unknown');
     return (
-      <div className={this.props.className}>
+      <article
+        className={this.props.className}
+        aria-label={localized('Message from %@', senderName)}
+      >
         <div className="message-item-white-wrap">
           <div className="message-item-area">
             {this._renderHeader()}
@@ -352,7 +354,7 @@ export default class MessageItem extends React.Component<MessageItemProps, Messa
             {this._renderFooterStatus()}
           </div>
         </div>
-      </div>
+      </article>
     );
   }
 

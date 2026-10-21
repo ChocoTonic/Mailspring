@@ -11,6 +11,34 @@ const FB_SHARE = (
     alt="Facebook"
   />
 );
+
+const MEDIUM_SHARE = (
+  <img
+    src="https://www.getmailspring.com/signature-assets/medium.gif"
+    width="13"
+    height="13"
+    alt="Medium"
+  />
+);
+
+const GITHUB_SHARE = (
+  <img
+    src="https://www.getmailspring.com/signature-assets/github.gif"
+    width="13"
+    height="13"
+    alt="Github"
+  />
+);
+
+const YOUTUBE_SHARE = (
+  <img
+    src="https://www.getmailspring.com/signature-assets/youtube.gif"
+    width="13"
+    height="13"
+    alt="YouTube"
+  />
+);
+
 const TWITTER_SHARE = (
   <img
     src="https://www.getmailspring.com/signature-assets/twitter.gif"
@@ -107,7 +135,8 @@ function GenericInfoBlock(props, prefixStyle: any = PrefixStyles.None) {
           <span>
             <a style={{ color: props.tintColor }} href={`tel:${props.fax}`}>
               {props.fax}
-            </a>&nbsp;(Fax)
+            </a>
+            &nbsp;(Fax)
           </span>
         )}
       </div>
@@ -149,6 +178,33 @@ function GenericInfoBlock(props, prefixStyle: any = PrefixStyles.None) {
             {LINKEDIN_SHARE}
           </a>
         )}
+        {props.mediumURL && (
+          <a
+            href={props.mediumURL}
+            title="Medium"
+            style={{ marginRight: 8, color: props.tintColor }}
+          >
+            {MEDIUM_SHARE}
+          </a>
+        )}
+        {props.githubURL && (
+          <a
+            href={props.githubURL}
+            title="GitHub"
+            style={{ marginRight: 8, color: props.tintColor }}
+          >
+            {GITHUB_SHARE}
+          </a>
+        )}
+        {props.youtubeURL && (
+          <a
+            href={props.youtubeURL}
+            title="YouTube"
+            style={{ marginRight: 8, color: props.tintColor }}
+          >
+            {YOUTUBE_SHARE}
+          </a>
+        )}
         {props.twitterHandle && (
           <a
             href={`https://twitter.com/${props.twitterHandle}`}
@@ -176,7 +232,7 @@ function GenericInfoBlock(props, prefixStyle: any = PrefixStyles.None) {
 Do not rename these methods after shipping a release with them */
 
 const Templates = [
-  function SignatureA(props) {
+  function SignatureA(props: Record<string, string>) {
     return (
       <table cellPadding={0} cellSpacing={0}>
         <tbody>
@@ -214,7 +270,7 @@ const Templates = [
     );
   },
 
-  function SignatureB(props) {
+  function SignatureB(props: Record<string, string>) {
     return (
       <div>
         <table cellPadding={0} cellSpacing={0}>
@@ -263,7 +319,7 @@ const Templates = [
     );
   },
 
-  function SignatureC(props) {
+  function SignatureC(props: Record<string, string>) {
     return (
       <table cellPadding={0} cellSpacing={0}>
         <tbody>
@@ -309,7 +365,7 @@ const Templates = [
     );
   },
 
-  function SignatureD(props) {
+  function SignatureD(props: Record<string, string>) {
     return (
       <table cellPadding={0} cellSpacing={0}>
         <tbody>
@@ -360,7 +416,7 @@ const Templates = [
     );
   },
 
-  function SignatureE(props) {
+  function SignatureE(props: Record<string, string>) {
     return (
       <table cellPadding={0} cellSpacing={0}>
         <tbody>
@@ -418,7 +474,8 @@ const Templates = [
                     <span style={{ marginRight: 8 }}>
                       <a style={{ color: props.tintColor }} href={`tel:${props.fax}`}>
                         {props.fax}
-                      </a>&nbsp;(Fax)
+                      </a>
+                      &nbsp;(Fax)
                     </span>
                   )}
                   {props.facebookURL && (
@@ -428,6 +485,33 @@ const Templates = [
                       style={{ marginRight: 8, color: props.tintColor }}
                     >
                       {FB_SHARE}
+                    </a>
+                  )}
+                  {props.mediumURL && (
+                    <a
+                      href={props.mediumURL}
+                      title="Medium"
+                      style={{ marginRight: 8, color: props.tintColor }}
+                    >
+                      {MEDIUM_SHARE}
+                    </a>
+                  )}
+                  {props.githubURL && (
+                    <a
+                      href={props.githubURL}
+                      title="Github"
+                      style={{ marginRight: 8, color: props.tintColor }}
+                    >
+                      {GITHUB_SHARE}
+                    </a>
+                  )}
+                  {props.youtubeURL && (
+                    <a
+                      href={props.youtubeURL}
+                      title="YouTube"
+                      style={{ marginRight: 8, color: props.tintColor }}
+                    >
+                      {YOUTUBE_SHARE}
                     </a>
                   )}
                   {props.linkedinURL && (

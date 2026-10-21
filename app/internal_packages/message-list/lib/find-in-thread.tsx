@@ -51,11 +51,11 @@ export default class FindInThread extends React.Component<
     this.setState(SearchableComponentStore.getCurrentSearchData());
   };
 
-  _onFindChange = event => {
+  _onFindChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     Actions.findInThread(event.target.value);
   };
 
-  _onFindKeyDown = event => {
+  _onFindKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
       return event.shiftKey ? this._onPrevResult() : this._onNextResult();
     } else if (event.key === 'Escape') {
@@ -109,16 +109,17 @@ export default class FindInThread extends React.Component<
         <KeyCommandsRegion globalHandlers={this._globalKeymapHandlers}>
           <div
             className="controls-wrap"
-            ref={el => {
+            ref={(el) => {
               this._controlsWrapEl = el;
             }}
           >
             <div className="input-wrap">
               <input
                 type="text"
-                ref={el => {
+                ref={(el) => {
                   this._searchBoxEl = el;
                 }}
+                aria-label={localized('Find in thread')}
                 placeholder={localized('Find in thread')}
                 onChange={this._onFindChange}
                 onKeyDown={this._onFindKeyDown}
@@ -129,30 +130,39 @@ export default class FindInThread extends React.Component<
 
               <div className="btn-wrap">
                 <button
-                  tabIndex={-1}
                   className={btnCls}
+                  aria-label={localized('Previous result')}
                   disabled={!this._navEnabled()}
                   onClick={this._onPrevResult}
                 >
                   <RetinaImg
                     name="ic-findinthread-previous.png"
                     mode={RetinaImg.Mode.ContentIsMask}
+                    aria-hidden="true"
                   />
                 </button>
 
                 <button
                   className={btnCls}
-                  tabIndex={-1}
+                  aria-label={localized('Next result')}
                   disabled={!this._navEnabled()}
                   onClick={this._onNextResult}
                 >
-                  <RetinaImg name="ic-findinthread-next.png" mode={RetinaImg.Mode.ContentIsMask} />
+                  <RetinaImg
+                    name="ic-findinthread-next.png"
+                    mode={RetinaImg.Mode.ContentIsMask}
+                    aria-hidden="true"
+                  />
                 </button>
               </div>
             </div>
 
-            <button className={btnCls} onClick={this._clearSearch}>
-              <RetinaImg name="ic-findinthread-close.png" mode={RetinaImg.Mode.ContentIsMask} />
+            <button className={btnCls} aria-label={localized('Close')} onClick={this._clearSearch}>
+              <RetinaImg
+                name="ic-findinthread-close.png"
+                mode={RetinaImg.Mode.ContentIsMask}
+                aria-hidden="true"
+              />
             </button>
           </div>
         </KeyCommandsRegion>

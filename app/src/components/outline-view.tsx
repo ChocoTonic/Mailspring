@@ -3,7 +3,6 @@ import React, { Component, CSSProperties } from 'react';
 import { DropZone } from './drop-zone';
 import { RetinaImg } from './retina-img';
 import OutlineViewItem from './outline-view-item';
-import PropTypes from 'prop-types';
 
 export interface IOutlineViewItem {
   id?: string;
@@ -26,7 +25,11 @@ export interface IOutlineViewItem {
   onDrop?: (...args: any[]) => any;
   onSelect?: (...args: any[]) => any;
   onDelete?: (...args: any[]) => any;
+  onMarkAllAsRead?: (...args: any[]) => any;
   onEdited?: (...args: any[]) => any;
+  onExport?: (...args: any[]) => any;
+  onExportMbox?: (...args: any[]) => any;
+  onCreateChild?: (...args: any[]) => any;
 }
 
 interface OutlineViewProps {
@@ -83,16 +86,6 @@ export class OutlineView extends Component<OutlineViewProps, OutlineViewState> {
    * @callback props.onCollapseToggled
    * @param {object} props - The entire props object for this OutlineView
    */
-  static propTypes = {
-    title: PropTypes.string,
-    titleColor: PropTypes.string,
-    iconName: PropTypes.string,
-    items: PropTypes.array,
-    collapsed: PropTypes.bool,
-    onItemCreated: PropTypes.func,
-    onCollapseToggled: PropTypes.func,
-  };
-
   static defaultProps = {
     title: '',
     items: [],
@@ -103,9 +96,9 @@ export class OutlineView extends Component<OutlineViewProps, OutlineViewState> {
   };
 
   _clickingCreateButton: boolean;
-  _expandTimeout?: NodeJS.Timer;
+  _expandTimeout?: ReturnType<typeof setTimeout>;
 
-  shouldComponentUpdate(nextProps, nextState) {
+  shouldComponentUpdate(nextProps: OutlineViewProps, nextState: OutlineViewState) {
     return !Utils.isEqualReact(nextProps, this.props) || !Utils.isEqualReact(nextState, this.state);
   }
 
@@ -139,7 +132,7 @@ export class OutlineView extends Component<OutlineViewProps, OutlineViewState> {
     }
   };
 
-  _onItemCreated = (item, value) => {
+  _onItemCreated = (item: IOutlineViewItem, value: string) => {
     this.setState({ showCreateInput: false });
     this.props.onItemCreated(value);
   };
@@ -152,7 +145,7 @@ export class OutlineView extends Component<OutlineViewProps, OutlineViewState> {
 
   // Renderers
 
-  _renderCreateInput(props = this.props) {
+  _renderCreateInput(props: OutlineViewProps = this.props) {
     const item = {
       id: `add-item-${props.title}`,
       name: '',
@@ -170,21 +163,35 @@ export class OutlineView extends Component<OutlineViewProps, OutlineViewState> {
     return (
       <span
         className="add-item-button"
+        role="button"
+        tabIndex={0}
+        aria-label={localized('Add item to %@', this.props.title)}
         onMouseDown={this._onCreateButtonMouseDown}
         onMouseUp={this._onCreateButtonClicked}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            this._onCreateButtonClicked();
+          }
+        }}
       >
         <RetinaImg
           url="mailspring://account-sidebar/assets/icon-sidebar-addcategory@2x.png"
           style={{ height: 15, width: 14 }}
           mode={RetinaImg.Mode.ContentIsMask}
+          alt=""
         />
       </span>
     );
   }
 
-  _renderHeading(allowCreate, collapsed, collapsible) {
+  _renderHeading(
+    allowCreate: boolean,
+    collapsed: boolean,
+    collapsible: ((props: OutlineViewProps) => void) | undefined
+  ) {
     const collapseLabel = collapsed ? localized('Show') : localized('Hide');
-    let style: CSSProperties = {}
+    let style: CSSProperties = {};
     if (this.props.titleColor) {
       style = {
         height: '50%',
@@ -192,7 +199,7 @@ export class OutlineView extends Component<OutlineViewProps, OutlineViewState> {
         borderLeftWidth: '4px',
         borderLeftColor: this.props.titleColor,
         borderLeftStyle: 'solid',
-      }
+      };
     }
     return (
       <DropZone
@@ -206,7 +213,24 @@ export class OutlineView extends Component<OutlineViewProps, OutlineViewState> {
         </span>
         {allowCreate ? this._renderCreateButton() : null}
         {collapsible ? (
-          <span className="collapse-button" onClick={this._onCollapseToggled}>
+          <span
+            className="collapse-button"
+            role="button"
+            tabIndex={0}
+            aria-expanded={!collapsed}
+            aria-label={
+              collapsed
+                ? localized('Expand %@', this.props.title)
+                : localized('Collapse %@', this.props.title)
+            }
+            onClick={this._onCollapseToggled}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                this._onCollapseToggled();
+              }
+            }}
+          >
             {collapseLabel}
           </span>
         ) : null}
@@ -214,20 +238,123 @@ export class OutlineView extends Component<OutlineViewProps, OutlineViewState> {
     );
   }
 
-  _renderItems() {
-    return this.props.items.map(item => <OutlineViewItem key={item.id} item={item} />);
+  _renderItems(sectionTitle?: string) {
+    const noneSelected = !this.props.items.some((item) => item.selected);
+    return this.props.items.map((item, idx) => (
+      <OutlineViewItem
+        key={item.id}
+        item={item}
+        isFirst={noneSelected && idx === 0}
+        sectionTitle={idx === 0 ? sectionTitle : undefined}
+      />
+    ));
   }
 
-  _renderOutline(allowCreate, collapsed) {
+  _onTreeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    // Don't intercept keyboard events when typing in an input (e.g. rename or new folder)
+    if ((event.target as HTMLElement).tagName === 'INPUT') return;
+
+    const tree = event.currentTarget;
+    const items = Array.from(tree.querySelectorAll<HTMLElement>('[role="treeitem"]')).filter(
+      (el) => !el.closest('[aria-expanded="false"] [role="treeitem"]')
+    );
+
+    const focused = document.activeElement as HTMLElement;
+    const currentIndex = items.indexOf(focused);
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      event.stopPropagation();
+      const next = items[currentIndex + 1];
+      if (next) {
+        next.setAttribute('tabIndex', '0');
+        if (focused && focused !== next) focused.setAttribute('tabIndex', '-1');
+        next.focus();
+      }
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      event.stopPropagation();
+      const prev = items[currentIndex - 1];
+      if (prev) {
+        prev.setAttribute('tabIndex', '0');
+        if (focused && focused !== prev) focused.setAttribute('tabIndex', '-1');
+        prev.focus();
+      }
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      if (focused) {
+        const expanded = focused.getAttribute('aria-expanded');
+        if (expanded === 'false') {
+          // Click the disclosure triangle to expand
+          const triangle = focused.querySelector<HTMLElement>('.disclosure-triangle');
+          if (triangle) triangle.click();
+        } else if (expanded === 'true') {
+          // Move to first child
+          const firstChild = items[currentIndex + 1];
+          if (firstChild) {
+            firstChild.setAttribute('tabIndex', '0');
+            focused.setAttribute('tabIndex', '-1');
+            firstChild.focus();
+          }
+        }
+      }
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      if (focused) {
+        const expanded = focused.getAttribute('aria-expanded');
+        if (expanded === 'true') {
+          // Click the disclosure triangle to collapse
+          const triangle = focused.querySelector<HTMLElement>('.disclosure-triangle');
+          if (triangle) triangle.click();
+        } else {
+          // Move to parent treeitem
+          let parent = focused.parentElement;
+          while (parent && parent !== tree) {
+            if (parent.getAttribute('role') === 'treeitem') {
+              parent.setAttribute('tabIndex', '0');
+              focused.setAttribute('tabIndex', '-1');
+              parent.focus();
+              break;
+            }
+            parent = parent.parentElement;
+          }
+        }
+      }
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      const first = items[0];
+      if (first) {
+        first.setAttribute('tabIndex', '0');
+        if (focused && focused !== first) focused.setAttribute('tabIndex', '-1');
+        first.focus();
+      }
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      const last = items[items.length - 1];
+      if (last) {
+        last.setAttribute('tabIndex', '0');
+        if (focused && focused !== last) focused.setAttribute('tabIndex', '-1');
+        last.focus();
+      }
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (focused) {
+        const clickTarget = focused.querySelector<HTMLElement>('.item');
+        if (clickTarget) clickTarget.click();
+      }
+    }
+  };
+
+  _renderOutline(allowCreate: boolean, collapsed: boolean) {
     if (collapsed) {
       return <span />;
     }
 
     const showInput = allowCreate && this.state.showCreateInput;
     return (
-      <div>
+      <div role="tree" aria-label={this.props.title} onKeyDown={this._onTreeKeyDown}>
         {showInput ? this._renderCreateInput() : null}
-        {this._renderItems()}
+        {this._renderItems(this.props.title || undefined)}
       </div>
     );
   }
@@ -238,10 +365,10 @@ export class OutlineView extends Component<OutlineViewProps, OutlineViewState> {
     const allowCreate = this.props.onItemCreated != null && !collapsed;
 
     return (
-      <section className="outline-view nylas-outline-view">
+      <div className="outline-view nylas-outline-view">
         {this._renderHeading(allowCreate, collapsed, collapsible)}
         {this._renderOutline(allowCreate, collapsed)}
-      </section>
+      </div>
     );
   }
 }

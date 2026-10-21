@@ -20,7 +20,7 @@ function applyExtensionTransforms(draft: Message, recipient: Contact) {
 
   const before = draft.body;
   const extensions = ComposerExtensionRegistry.extensions().filter(
-    ext => !!ext.applyTransformsForSending
+    (ext) => !!ext.applyTransformsForSending
   );
 
   if (draft.plaintext) {
@@ -31,9 +31,8 @@ function applyExtensionTransforms(draft: Message, recipient: Contact) {
     draft.body = before;
     return after;
   } else {
-    const fragment = document.createDocumentFragment();
-    const draftBodyRootNode = document.createElement('root');
-    fragment.appendChild(draftBodyRootNode);
+    // An inert document, so images in the body aren't fetched while it is transformed
+    const draftBodyRootNode = document.implementation.createHTMLDocument('').createElement('root');
     draftBodyRootNode.innerHTML = draft.body;
 
     for (const ext of extensions) {
@@ -56,7 +55,7 @@ export class SendDraftTask extends Task {
     task.silent = silent;
 
     const separateBodies = ComposerExtensionRegistry.extensions().some(
-      ext => ext.needsPerRecipientBodies && ext.needsPerRecipientBodies(task.draft)
+      (ext) => ext.needsPerRecipientBodies && ext.needsPerRecipientBodies(task.draft)
     );
 
     if (task.draft.plaintext) {
@@ -69,7 +68,7 @@ export class SendDraftTask extends Task {
       task.perRecipientBodies = {
         self: task.draft.body,
       };
-      task.draft.participants({ includeFrom: false, includeBcc: true }).forEach(recipient => {
+      task.draft.participants({ includeFrom: false, includeBcc: true }).forEach((recipient) => {
         task.perRecipientBodies[recipient.email] = applyExtensionTransforms(task.draft, recipient);
       });
     } else {
@@ -101,37 +100,26 @@ export class SendDraftTask extends Task {
   draft: Message;
   perRecipientBodies: { [email: string]: string };
   silent: boolean;
+  // These are defined as accessors via Object.defineProperty after class declaration
+  declare headerMessageId: string;
 
   constructor(data: AttributeValues<typeof SendDraftTask.attributes> = {}) {
     super(data);
   }
 
-  get accountId() {
-    return this.draft.accountId;
-  }
-
-  set accountId(a) {
-    // no-op
-  }
-
-  get headerMessageId() {
-    return this.draft.headerMessageId;
-  }
-
-  set headerMessageId(h) {
-    // no-op
-  }
+  // Note: accountId and headerMessageId accessors are defined after class
+  // declaration using Object.defineProperty to work around TypeScript 5
+  // property/accessor override restrictions
 
   label() {
     return this.silent ? null : localized('Sending message');
   }
 
   willBeQueued() {
-    const account = AccountStore.accountForEmail(this.draft.from[0].email);
-
     if (!this.draft.from[0]) {
       throw new Error('SendDraftTask - you must populate `from` before sending.');
     }
+    const account = AccountStore.accountForEmail(this.draft.from[0].email);
     if (!account) {
       throw new Error('SendDraftTask - you can only send drafts from a configured account.');
     }
@@ -164,7 +152,7 @@ export class SendDraftTask extends Task {
     }
   }
 
-  onError({ key, debuginfo }) {
+  onError({ key, debuginfo }: { key: string; debuginfo: string }) {
     let errorMessage = null;
     let errorDetail = null;
 
@@ -213,3 +201,27 @@ export class SendDraftTask extends Task {
     });
   }
 }
+
+// Define accessors using Object.defineProperty to work around TypeScript 5
+// property/accessor override restrictions (TS2611)
+Object.defineProperty(SendDraftTask.prototype, 'accountId', {
+  get(this: SendDraftTask) {
+    return this.draft?.accountId;
+  },
+  set(_a: string) {
+    // no-op
+  },
+  enumerable: true,
+  configurable: true,
+});
+
+Object.defineProperty(SendDraftTask.prototype, 'headerMessageId', {
+  get(this: SendDraftTask) {
+    return this.draft?.headerMessageId;
+  },
+  set(_h: string) {
+    // no-op
+  },
+  enumerable: true,
+  configurable: true,
+});

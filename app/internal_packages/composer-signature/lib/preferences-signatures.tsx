@@ -1,4 +1,3 @@
-
 import React from 'react';
 import {
   localized,
@@ -12,6 +11,7 @@ import {
   IDefaultSignatures,
   IAliasSet,
   InlineStyleTransformer,
+  SanitizeTransformer,
 } from 'mailspring-exports';
 import { Flexbox, EditableList } from 'mailspring-component-kit';
 
@@ -27,17 +27,58 @@ interface SignatureEditorProps {
   accountsAndAliases: IAliasSet;
 }
 
-interface SignatureEditorState { }
+interface SignatureEditorState {}
 
 class SignatureEditor extends React.Component<SignatureEditorProps, SignatureEditorState> {
-  _onTitleChange = event => {
+  _onTitleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const sig = this.props.signature;
     Actions.upsertSignature({ ...sig, title: event.target.value }, sig.id);
   };
 
-  _onRawBodyChange = async event => {
+  _onRawBodyChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    this._saveRawBody(event.target.value);
+  };
+
+  // The raw source field is a plain <textarea>, so pasting rich content would normally
+  // insert only the text/plain flavor of the clipboard. When the clipboard also carries
+  // HTML (eg: copying a signature out of a webmail client), insert the markup itself so
+  // the user gets the formatting they copied rather than a wall of unstyled text.
+  _onRawBodyPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const plain = event.clipboardData.getData('text/plain');
+
+    // If the plain text flavor already looks like markup, the user is copying HTML
+    // source (from an editor, view-source, another signature) and expects it verbatim.
+    if (/<[a-z!/][\s\S]*>/i.test(plain)) {
+      return;
+    }
+
+    // Sanitize with the same rules we apply to pasted content in the composer — this
+    // strips scripts, event handlers and unsafe URI schemes before the markup can be
+    // saved and rendered into the preview / composer.
+    const html = SanitizeTransformer.runSync(event.clipboardData.getData('text/html')).trim();
+    if (!html) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const el = event.currentTarget;
+
+    // Prefer execCommand so the paste joins the textarea's native undo stack. It emits
+    // an `input` event, which React surfaces as our onChange handler.
+    if (document.execCommand('insertText', false, html)) {
+      return;
+    }
+
+    const { selectionStart, selectionEnd, value } = el;
+    el.value = `${value.slice(0, selectionStart)}${html}${value.slice(selectionEnd)}`;
+    el.selectionStart = el.selectionEnd = selectionStart + html.length;
+    this._saveRawBody(el.value);
+  };
+
+  _saveRawBody = async (value: string) => {
     const sig = this.props.signature;
-    let body = event.target.value;
+    let body = value;
     try {
       body = await InlineStyleTransformer.run(body);
     } catch (err) {
@@ -46,7 +87,7 @@ class SignatureEditor extends React.Component<SignatureEditorProps, SignatureEdi
     Actions.upsertSignature({ ...sig, body }, sig.id);
   };
 
-  _onDataFieldChange = event => {
+  _onDataFieldChange = (event: { target: { id: string; value: string } }) => {
     const { id, value } = event.target;
     const sig = this.props.signature;
 
@@ -54,7 +95,7 @@ class SignatureEditor extends React.Component<SignatureEditorProps, SignatureEdi
     // display a warning UNLESS the html is an unmodified template HTML
     if (id === 'templateName' && !sig.data.templateName && value) {
       const htmlMatchesATemplate = Templates.find(
-        t => sig.body === RenderSignatureData({ ...sig.data, templateName: t.name })
+        (t) => sig.body === RenderSignatureData({ ...sig.data, templateName: t.name })
       );
       if (!htmlMatchesATemplate) {
         const idx = require('@electron/remote').dialog.showMessageBoxSync({
@@ -76,7 +117,7 @@ class SignatureEditor extends React.Component<SignatureEditorProps, SignatureEdi
 
     // re-render
     if (sig.data.templateName) {
-      const template = Templates.find(t => t.name === sig.data.templateName);
+      const template = Templates.find((t) => t.name === sig.data.templateName);
       if (template) {
         sig.body = RenderSignatureData(sig.data);
       }
@@ -105,9 +146,12 @@ class SignatureEditor extends React.Component<SignatureEditorProps, SignatureEdi
     return (
       <div className={`signature-wrap ${empty && 'empty'}`}>
         <div className="section basic-info">
+          <label htmlFor="signature-title" className="sr-only">
+            {localized('Signature Name')}
+          </label>
           <input
             type="text"
-            id="title"
+            id="signature-title"
             placeholder={localized('Name')}
             value={signature.title || ''}
             onChange={this._onTitleChange}
@@ -131,43 +175,52 @@ class SignatureEditor extends React.Component<SignatureEditorProps, SignatureEdi
 
         {!resolvedData.templateName
           ? [
-            <div key="header" className="section-header">
-              {localized('Raw Source')}
-            </div>,
-            <textarea
-              id="body"
-              key={`textarea ${signature.id}`}
-              className="section raw-html"
-              spellCheck={false}
-              onChange={this._onRawBodyChange}
-              defaultValue={signature.body || ''}
-            />,
-          ]
+              <div key="header" className="section-header">
+                {localized('Raw Source')}
+              </div>,
+              <label key="body-label" htmlFor="signature-body" className="sr-only">
+                {localized('Signature HTML')}
+              </label>,
+              <textarea
+                id="signature-body"
+                key={`textarea ${signature.id}`}
+                className="section raw-html"
+                spellCheck={false}
+                onChange={this._onRawBodyChange}
+                onPaste={this._onRawBodyPaste}
+                defaultValue={signature.body || ''}
+              />,
+              <div key="body-note" className="section-note">
+                {localized(
+                  'Moving from another mail app? Select your existing signature in an email and copy-paste it into the box above.'
+                )}
+              </div>,
+            ]
           : [
-            <div key="header" className="section-header">
-              {localized('Information')}
-            </div>,
-            <div key="section" className="section information">
-              {DataShape.map(item => (
-                <div className="field" key={item.key}>
-                  <label>{item.label}</label>
-                  <input
-                    type="text"
-                    onChange={this._onDataFieldChange}
-                    placeholder={item.placeholder}
-                    id={item.key}
-                    value={data[item.key] || ''}
-                  />
-                </div>
-              ))}
-              <SignaturePhotoPicker
-                id={signature.id}
-                data={data}
-                resolvedURL={resolvedData.photoURL}
-                onChange={this._onDataFieldChange}
-              />
-            </div>,
-          ]}
+              <div key="header" className="section-header">
+                {localized('Information')}
+              </div>,
+              <div key="section" className="section information">
+                {DataShape.map((item) => (
+                  <div className="field" key={item.key}>
+                    <label htmlFor={item.key}>{item.label}</label>
+                    <input
+                      type="text"
+                      onChange={this._onDataFieldChange}
+                      placeholder={item.placeholder}
+                      id={item.key}
+                      value={data[item.key] || ''}
+                    />
+                  </div>
+                ))}
+                <SignaturePhotoPicker
+                  id={signature.id}
+                  data={data}
+                  resolvedURL={resolvedData.photoURL}
+                  onChange={this._onDataFieldChange}
+                />
+              </div>,
+            ]}
       </div>
     );
   }
@@ -198,7 +251,7 @@ export default class PreferencesSignatures extends React.Component<
   }
 
   componentWillUnmount() {
-    this.unsubscribers.forEach(unsubscribe => unsubscribe());
+    this.unsubscribers.forEach((unsubscribe) => unsubscribe());
   }
 
   _onChange = () => {
@@ -237,16 +290,16 @@ export default class PreferencesSignatures extends React.Component<
     Actions.selectSignature(id);
   };
 
-  _onDeleteSignature = signature => {
+  _onDeleteSignature = (signature: ISignature) => {
     Actions.removeSignature(signature);
   };
 
-  _onEditSignatureTitle = nextTitle => {
+  _onEditSignatureTitle = (nextTitle: string) => {
     const { title, ...rest } = this.state.selectedSignature;
     Actions.upsertSignature({ title: nextTitle, ...rest }, rest.id);
   };
 
-  _onSelectSignature = sig => {
+  _onSelectSignature = (sig: ISignature) => {
     Actions.selectSignature(sig.id);
   };
 
@@ -259,7 +312,7 @@ export default class PreferencesSignatures extends React.Component<
           showEditIcon
           className="signature-list"
           items={sigArr}
-          itemContent={sig => sig.title}
+          itemContent={(sig) => sig.title}
           onCreateItem={this._onAddSignature}
           onDeleteItem={this._onDeleteSignature}
           onItemEdited={this._onEditSignatureTitle}

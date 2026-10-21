@@ -15,16 +15,17 @@ import React from 'react';
 
 import BaseMarkPlugins from './base-mark-plugins';
 import TemplatePlugins, { VARIABLE_TYPE } from './template-plugins';
-import SpellcheckPlugins from './spellcheck-plugins';
 import UneditablePlugins, { UNEDITABLE_TYPE } from './uneditable-plugins';
 import BaseBlockPlugins, { BLOCK_CONFIG, isQuoteNode } from './base-block-plugins';
 import InlineAttachmentPlugins, { IMAGE_TYPE } from './inline-attachment-plugins';
 import MarkdownPlugins from './markdown-plugins';
 import LinkPlugins from './link-plugins';
 import EmojiPlugins, { EMOJI_TYPE } from './emoji-plugins';
+import GrammarCheckPlugins from './grammar-check-plugins';
 import { Rule, ComposerEditorPlugin } from './types';
 
 import './patch-chrome-ime';
+import './patch-slate-normalizing';
 import { deepenPlaintextQuote } from './plaintext';
 
 export const schema = {
@@ -57,10 +58,10 @@ export const plugins: ComposerEditorPlugin[] = [
   ...BaseMarkPlugins,
   ...TemplatePlugins,
   ...EmojiPlugins,
+  ...GrammarCheckPlugins,
   ...LinkPlugins,
   ...BaseBlockPlugins,
   ...MarkdownPlugins,
-  ...SpellcheckPlugins,
 ];
 
 const cssValueIsZero = (val: string | number) => {
@@ -91,13 +92,13 @@ function parseHtml(html: string) {
   collapse(tree);
 
   // get rid of <meta> and <style> tags since styles have been inlined
-  Array.from(tree.querySelectorAll('meta')).forEach(m => m.remove());
-  Array.from(tree.querySelectorAll('style')).forEach(m => m.remove());
-  Array.from(tree.querySelectorAll('title')).forEach(m => m.remove());
+  Array.from(tree.querySelectorAll('meta')).forEach((m) => m.remove());
+  Array.from(tree.querySelectorAll('style')).forEach((m) => m.remove());
+  Array.from(tree.querySelectorAll('title')).forEach((m) => m.remove());
 
   // remove any display:none nodes. This is commonly used in HTML email to
   // send a plaintext "summary" sentence
-  Array.from(tree.querySelectorAll('[style]')).forEach(m => {
+  Array.from(tree.querySelectorAll('[style]')).forEach((m) => {
     if ((m as HTMLElement).style.display === 'none') {
       m.remove();
     }
@@ -106,7 +107,7 @@ function parseHtml(html: string) {
   // remove any images with an explicit 1px by 1px size - they're often the
   // last node and tail void nodes break Slate's select-all. Also we
   // don't want to forward / reply with other people's tracking pixels
-  Array.from(tree.querySelectorAll('img')).forEach(m => {
+  Array.from(tree.querySelectorAll('img')).forEach((m) => {
     const w = m.getAttribute('width') || m.style.width || '';
     const h = m.getAttribute('height') || m.style.height || '';
     if (w.replace('px', '') === '1' && h.replace('px', '') === '1') {
@@ -117,7 +118,7 @@ function parseHtml(html: string) {
   // We coerce <p> tags to <div> tags and don't apply any padding. Any incoming <p>
   // tags should be followed by <br> tags to maintain the intended spacing.
   const pWalker = document.createTreeWalker(tree, NodeFilter.SHOW_ELEMENT, {
-    acceptNode: node => {
+    acceptNode: (node) => {
       return node.nodeName === 'P' ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
     },
   });
@@ -156,7 +157,7 @@ function parseHtml(html: string) {
 // This is copied from slate-html-serializer/index.js and improved to preserve
 // sequential space characters that would be compacted during the HTML display.
 const TEXT_RULE_IMPROVED: Rule = {
-  deserialize: el => {
+  deserialize: (el) => {
     if (el.tagName && el.tagName.toLowerCase() === 'br') {
       return {
         object: 'text',
@@ -183,7 +184,7 @@ const TEXT_RULE_IMPROVED: Rule = {
       };
     }
   },
-  serialize: (obj, children) => {
+  serialize: (obj: any, children: string) => {
     if (obj.object === 'string') {
       return children.split('\n').reduce((array, text, i) => {
         if (i !== 0) array.push(<br />);
@@ -223,21 +224,22 @@ const TEXT_RULE_IMPROVED: Rule = {
 
 const HtmlSerializer = new Html({
   defaultBlock: { type: BLOCK_CONFIG.div.type },
-  rules: [].concat(...plugins.filter(p => p.rules).map(p => p.rules)).concat([TEXT_RULE_IMPROVED]),
+  rules: []
+    .concat(...plugins.filter((p) => p.rules).map((p) => p.rules))
+    .concat([TEXT_RULE_IMPROVED]),
   parseHtml: parseHtml,
 });
 
 /* Patch: The HTML Serializer doesn't properly handle nested marks
 because when it discovers another mark it fails to call applyMark
 on the result. */
-(HtmlSerializer as any).deserializeMark = function(mark: Mark) {
+(HtmlSerializer as any).deserializeMark = function (mark: Mark) {
   const type = mark.type;
   const data = mark.data;
 
   const applyMark = function applyMark(
     node: TextJSON | InlineJSON | BlockJSON | MarkJSON
   ): NodeJSON {
-    // TODO BG
     if (node.object === 'mark') {
       // THIS LINE CONTAINS THE CHANGE. +map
       let result = (HtmlSerializer as any).deserializeMark(node);
@@ -246,7 +248,7 @@ on the result. */
       }
       return result;
     } else if (node.object === 'text') {
-      node.leaves = node.leaves.map(function(leaf) {
+      node.leaves = node.leaves.map(function (leaf) {
         leaf.marks = leaf.marks || [];
         leaf.marks.push({ object: 'mark', type: type, data: data });
         return leaf;
@@ -259,7 +261,7 @@ on the result. */
 
     return node;
   };
-  return (mark as any).nodes.reduce(function(nodes, node) {
+  return (mark as any).nodes.reduce(function (nodes, node) {
     const ret = applyMark(node);
     if (Array.isArray(ret)) return nodes.concat(ret);
     nodes.push(ret);
@@ -283,7 +285,7 @@ export function convertFromHTML(html: string) {
     // visit all our children
     node.nodes.forEach(wrapMixedChildren);
 
-    const blockChildren = node.nodes.filter(n => n.object === 'block');
+    const blockChildren = node.nodes.filter((n) => n.object === 'block');
     const mixed = blockChildren.length > 0 && blockChildren.length !== node.nodes.length;
     if (!mixed) {
       return;
@@ -369,7 +371,11 @@ export function convertFromHTML(html: string) {
   - Ensure `block` elements have an empty text node child.
   */
   const optimizeTextNodesForNormalization = (node: DocumentJSON | NodeJSON) => {
-    if (!('nodes' in node)) return;
+    if (node.object === 'text') return;
+    // Void inlines (eg: emoji, template variables) are sometimes deserialized
+    // without a `nodes` array at all rather than an explicit empty one - treat
+    // both the same so the empty-text-child fix below always applies to them.
+    if (!('nodes' in node) || !node.nodes) node.nodes = [];
     node.nodes.forEach(optimizeTextNodesForNormalization);
 
     // Convert adjacent text nodes into a single text node with all the leaves
@@ -388,8 +394,12 @@ export function convertFromHTML(html: string) {
     }
     node.nodes = cleanChildren;
 
-    // Ensure `block` elements have an empty text node child
-    if (node.object === 'block' && node.nodes.length === 0) {
+    // Ensure `block` and `inline` elements have an empty text node child.
+    // This matters most for void inlines (eg: inline `cid:` images, which are
+    // deserialized with `nodes: []`) - Slate's Void.renderText reads
+    // `node.getFirstText().key` and throws if the void node has no text
+    // descendant at all.
+    if ((node.object === 'block' || node.object === 'inline') && node.nodes.length === 0) {
       node.nodes = [
         {
           object: 'text',
@@ -430,7 +440,8 @@ export function convertToPlainText(value: Value) {
       html = html.replace(/<br ?\/?>/g, '\n');
       html = html.replace(/<\/div ?>/g, '\n</div>');
 
-      const div = document.createElement('div');
+      // An inert document, so the quoted message's images aren't fetched
+      const div = document.implementation.createHTMLDocument('').createElement('div');
       div.innerHTML = html;
 
       // This creates a ton of extra newlines, so anywhere this more than two empty spaces
@@ -455,7 +466,7 @@ export function convertToPlainText(value: Value) {
 }
 
 /* This is a utility method that converts the value to JSON and strips every node
-of it's sensitive bigts, replacing text, links, images, etc. with "XXX" characers
+of its sensitive bits, replacing text, links, images, etc. with "X" characters
 of the same length. This allows us to log exceptions with the document's structure
 so we can debug challenging problems but not leak PII. */
 export function convertToShapeWithoutContent(value: Value) {

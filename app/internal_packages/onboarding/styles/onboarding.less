@@ -17,12 +17,12 @@
 .alpha-fade-enter.alpha-fade-enter-active {
   opacity: 1;
 }
-.alpha-fade-leave {
+.alpha-fade-exit {
   opacity: 1;
   transition: all 0.15s ease-in;
 }
 
-.alpha-fade-leave.alpha-fade-leave-active {
+.alpha-fade-exit.alpha-fade-exit-active {
   opacity: 0.01;
 }
 
@@ -307,6 +307,22 @@
     padding-top: 20px;
     margin: auto;
   }
+  .shared-mailbox-confirmation {
+    display: inline-block;
+    margin-top: 22px;
+    padding: 7px 16px;
+    background: rgba(0, 0, 0, 0.035);
+    border: 1px solid #d8d8d8;
+    border-radius: 15px;
+    color: #555;
+    strong {
+      font-weight: 500;
+      color: #333;
+    }
+    a {
+      margin-left: 10px;
+    }
+  }
   .twocol {
     display: flex;
     flex-direction: row;
@@ -364,9 +380,19 @@
 }
 .page.account-setup.google,
 .page.account-setup.office,
+.page.account-setup.outlook,
 .page.account-setup.AccountOnboardingSuccess {
   .logo-container {
     padding-top: 160px;
+  }
+}
+
+// The Office 365 pages stack more content (the IMAP/SMTP requirements note, the
+// shared mailbox confirmation / form) than the other OAuth pages — with the full
+// 160px the "Page didn't open?" fallback gets pushed past the fixed window height.
+.page.account-setup.office {
+  .logo-container {
+    padding-top: 70px;
   }
 }
 
@@ -502,7 +528,6 @@
     line-height: 41px;
     font-weight: 200;
     cursor: default;
-    -webkit-font-smoothing: subpixel-antialiased;
   }
 
   .sub-text {
@@ -557,7 +582,7 @@ body.platform-win32 {
     .alpha-fade-enter {
       transition: all 0.01s ease-out;
     }
-    .alpha-fade-leave {
+    .alpha-fade-exit {
       transition: opacity 0.01s ease-in;
     }
   }
@@ -600,10 +625,12 @@ body.platform-win32 {
     width: 50%;
     border: 1px solid #c6c7c7;
     margin: 10px;
+    vertical-align: middle;
   }
   .copy-to-clipboard {
-    display: inline-block;
     cursor: pointer;
+    margin-right: 0;
+    padding: 0;
     img {
       background-color: @btn-icon-color;
     }

@@ -42,7 +42,6 @@ class AddContactToolbarWithData extends React.Component<AddContactToolbarProps> 
           commands={enabled ? { 'core:add-item': this.onAdd } : {}}
         >
           <button
-            tabIndex={-1}
             disabled={!enabled}
             className={`btn btn-toolbar btn-new-contact ${!enabled && 'btn-disabled'}`}
             title={
@@ -60,19 +59,18 @@ class AddContactToolbarWithData extends React.Component<AddContactToolbarProps> 
   }
 }
 
-export const AddContactToolbar: React.FunctionComponent<
-  AddContactToolbarProps
-> = ListensToFluxStore(
-  ({ listSource, editing, perspective }) => (
-    <AddContactToolbarWithData editing={editing} perspective={perspective} />
-  ),
-  {
-    stores: [Store],
-    getStateFromStores: () => ({
-      editing: Store.editing(),
-      perspective: Store.perspective(),
-    }),
-  }
-);
+export const AddContactToolbar: React.FunctionComponent<AddContactToolbarProps> =
+  ListensToFluxStore(
+    ({ listSource, editing, perspective }) => (
+      <AddContactToolbarWithData editing={editing} perspective={perspective} />
+    ),
+    {
+      stores: [Store],
+      getStateFromStores: () => ({
+        editing: Store.editing(),
+        perspective: Store.perspective(),
+      }),
+    }
+  );
 
 AddContactToolbar.displayName = 'AddContactToolbar';

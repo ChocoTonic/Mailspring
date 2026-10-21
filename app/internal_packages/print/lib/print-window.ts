@@ -1,9 +1,12 @@
 import path from 'path';
 import fs from 'fs';
+import { pathToFileURL } from 'url';
 
 import { localized } from 'mailspring-exports';
+import { escapeHTML } from '../../../src/string-utils';
+import { developerToolsAvailable } from '../../../src/developer-tools';
 
-const { app, BrowserWindow } = require('@electron/remote');
+const { app, BrowserWindow, dialog } = require('@electron/remote');
 
 export default class PrintWindow {
   browserWin: Electron.BrowserWindow;
@@ -20,8 +23,10 @@ export default class PrintWindow {
     const scriptPath = path.join(__dirname, '..', 'static', 'print.js');
     const stylesPath = path.join(__dirname, '..', 'static', 'print-styles.css');
     const participantsHtml = participants
-      .map(part => {
-        return `<li class="participant"><span>${part.name || ''} &lt;${part.email}&gt;</span></li>`;
+      .map((part) => {
+        return `<li class="participant"><span>
+          ${escapeHTML(part.name || '')} &lt;${escapeHTML(part.email)}&gt;
+        </span></li>`;
       })
       .join('');
 
@@ -29,10 +34,10 @@ export default class PrintWindow {
       <!DOCTYPE html>
       <html>
         <head>
-          <meta http-equiv="Content-Security-Policy" content="default-src * mailspring:; script-src 'self' chrome-extension://react-developer-tools; style-src * 'unsafe-inline' mailspring:; img-src * data: mailspring: file:; object-src none; media-src none; manifest-src none;">
+          <meta http-equiv="Content-Security-Policy" content="default-src * mailspring:; frame-src 'none'; script-src 'self' chrome-extension://react-developer-tools; style-src * 'unsafe-inline' mailspring:; img-src * data: mailspring: file:; object-src none; media-src none; manifest-src none;">
           <meta charset="utf-8">
           ${styleTags}
-          <link rel="stylesheet" type="text/css" href="${stylesPath}">
+          <link rel="stylesheet" type="text/css" href="${pathToFileURL(stylesPath).href}">
         </head>
         <body>
           <div id="print-header">
@@ -42,29 +47,31 @@ export default class PrintWindow {
             </div>
             <div style="padding: 10px 14px;">
               <div id="close-button">
-                ${localized('Close')}
+                ${escapeHTML(localized('Close'))}
               </div>
               <div id="print-button">
-                ${localized('Print')}
+                ${escapeHTML(localized('Print'))}
               </div>
               <div id="print-pdf-button">
-                ${localized('Save as PDF')}
+                ${escapeHTML(localized('Save as PDF'))}
               </div>
               <div class="logo-wrapper">
-                <span class="account">${account.name} &lt;${account.email}&gt;</span>
+                <span class="account">${escapeHTML(account.name)} &lt;${escapeHTML(
+                  account.email
+                )}&gt;</span>
               </div>
             </div>
           </div>
           <div id="print-header-spacing"></div>
-          <h1 class="print-subject">${subject}</h1>
+          <h1 class="print-subject">${escapeHTML(subject)}</h1>
           <div class="print-participants">
             <ul>
               ${participantsHtml}
             </ul>
           </div>
           ${htmlContent}
-          <script type="text/javascript" src="${tmpMessagesPath}"></script>
-          <script type="text/javascript" src="${scriptPath}"></script>
+          <script type="text/javascript" src="${pathToFileURL(tmpMessagesPath).href}"></script>
+          <script type="text/javascript" src="${pathToFileURL(scriptPath).href}"></script>
         </body>
       </html>
     `;
@@ -77,12 +84,43 @@ export default class PrintWindow {
       webPreferences: {
         preload: preloadPath,
         nodeIntegration: false,
-        contextIsolation: false,
+        contextIsolation: true,
+        devTools: developerToolsAvailable(),
       },
     });
-    require('@electron/remote')
-      .require('@electron/remote/main')
-      .enable(this.browserWin.webContents);
+
+    this.browserWin.webContents.ipc.on('print-to-pdf', async () => {
+      const { filePath } = await dialog.showSaveDialog({
+        defaultPath: `${subject}.pdf`,
+      });
+
+      if (!filePath) {
+        return;
+      }
+
+      try {
+        const data = await this.browserWin.webContents.printToPDF({
+          // Electron 21 replaced the old top-level `marginsType` enum with explicit
+          // per-side inches (PrintToPDFMargins). `marginType: 'none'` was neither: an
+          // unrecognised key, silently ignored, so these PDFs have been printing with the
+          // default 1cm margins rather than none.
+          margins: { top: 0, bottom: 0, left: 0, right: 0 },
+          pageSize: 'Letter',
+          printBackground: true,
+          landscape: false,
+        });
+        fs.writeFileSync(filePath, data);
+      } catch (err) {
+        AppEnv.showErrorDialog({
+          title: localized('Save as PDF Failed'),
+          message: localized(
+            'Mailspring could not generate the PDF. Please try again. If the problem persists, try printing to a PDF printer instead.\n\nError: %@',
+            err.message
+          ),
+        });
+      }
+    });
+
     this.browserWin.removeMenu();
     fs.writeFileSync(tmpMessagesPath, `window.printMessages = ${printMessages}`);
     fs.writeFileSync(this.tmpFile, content);
@@ -93,6 +131,6 @@ export default class PrintWindow {
    * that script will pop out the print dialog.
    */
   load() {
-    this.browserWin.loadURL(`file://${this.tmpFile}`);
+    this.browserWin.loadURL(pathToFileURL(this.tmpFile).href);
   }
 }

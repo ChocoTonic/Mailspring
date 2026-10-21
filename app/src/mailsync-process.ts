@@ -10,6 +10,7 @@ import os from 'os';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import { localized } from './intl';
+import { developerToolsAvailable } from './developer-tools';
 import { IIdentity, Account } from 'mailspring-exports';
 
 import {
@@ -31,7 +32,7 @@ export const LocalizedErrorStrings = {
   ),
   ErrorInvalidAccount: localized(
     'This account is invalid or Mailspring could not find the Inbox or All Mail folder. %@',
-    'http://support.getmailspring.com/hc/en-us/articles/115001881912'
+    'https://getmailspring.com/docs/enable-all-mail-folder-for-gmail'
   ),
   ErrorTLSNotAvailable: localized('TLS Not Available'),
   ErrorParse: localized('Parsing Error'),
@@ -78,9 +79,40 @@ export const LocalizedErrorStrings = {
   ),
   ErrorIdentityMissingFields: localized(
     'Your Mailspring ID is missing required fields - you may need to reset Mailspring. %@',
-    'http://support.getmailspring.com/hc/en-us/articles/115002012491'
+    'https://getmailspring.com/docs/your-mailspring-id-is-missing-required-fields'
   ),
 };
+
+// LocalizedErrorStrings codes that, despite being "classified" by mailsync,
+// can also indicate a genuine Mailspring defect rather than a server/user
+// condition - a malformed-response parser regression, or corrupted local
+// identity state. These should keep reaching error reporting instead of
+// being treated as expected, user-actionable failures.
+const AMBIGUOUS_MAILSYNC_ERRORS = new Set(['ErrorParse', 'ErrorIdentityMissingFields']);
+
+/*
+Extracts mailsync's JSON result from what it wrote to stdout.
+
+The result is one JSON object, but the end of the stream is not reliably that object. It
+arrives without a trailing newline, mailsync prints human-readable progress lines before it
+(`Running Setup`), and on Linux it can emit a diagnostic - a missing libtidy is the common
+one - at any point. Parsing the last line of stdout and stderr combined turns any of those
+into "an unknown error has occurred mailsync: 0", so scan stdout backwards for the last
+line that actually parses.
+*/
+export function lastJSONResponse(stdout: string): any | null {
+  const lines = stdout.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line.startsWith('{')) continue;
+    try {
+      return JSON.parse(line);
+    } catch (err) {
+      // Not the result line - keep looking further back.
+    }
+  }
+  return null;
+}
 
 export class MailsyncProcess extends EventEmitter {
   _proc: ChildProcess = null;
@@ -128,7 +160,7 @@ export class MailsyncProcess extends EventEmitter {
         nodeIntegration: false,
         javascript: false,
         contextIsolation: false,
-        enableRemoteModule: true,
+        devTools: developerToolsAvailable(),
       },
     });
     this._win.setContentSize(350, 90);
@@ -152,12 +184,16 @@ export class MailsyncProcess extends EventEmitter {
   }
 
   _spawnProcess(mode) {
-    const env = {
+    // Build on a null-prototype object so the spawned engine inherits only
+    // genuine environment variables, not properties a prototype-pollution bug
+    // elsewhere in the process could have added to Object.prototype. See
+    // GHSA-gjr7-3mj2-cr54.
+    const env = Object.assign(Object.create(null), process.env, {
       CONFIG_DIR_PATH: this.configDirPath,
       GMAIL_CLIENT_ID: GMAIL_CLIENT_ID,
       GMAIL_CLIENT_SECRET: GMAIL_CLIENT_SECRET,
       IDENTITY_SERVER: 'unknown',
-    };
+    });
     if (process.type === 'renderer') {
       const rootURLForServer = require('./flux/mailspring-api-request').rootURLForServer;
       env.IDENTITY_SERVER = rootURLForServer('identity');
@@ -193,70 +229,150 @@ export class MailsyncProcess extends EventEmitter {
     }
   }
 
+  // Redacts known secrets from a log/error string before it's surfaced to
+  // the UI, error reporting, or thrown errors. Two strategies are combined:
+  //
+  // 1. Key-based: replace the value of any known sensitive JSON key (e.g.
+  //    "refresh_token":"abc"). This catches secrets the engine has rotated
+  //    and not yet pushed back to us (e.g. ProcessAccountSecretsUpdated),
+  //    where the new value is not present in this.account.
+  // 2. Value-based: replace literal occurrences of the secrets currently
+  //    cached on this.account, in case they appear outside JSON form.
+  _stripSecrets(text: string) {
+    if (!text) return text;
+    let out = text;
+
+    const SENSITIVE_JSON_KEYS = ['refresh_token', 'access_token', 'imap_password', 'smtp_password'];
+    for (const key of SENSITIVE_JSON_KEYS) {
+      // Match "key":"<anything-but-unescaped-quote>" allowing escaped quotes inside.
+      const re = new RegExp(`("${key}"\\s*:\\s*")(?:\\\\.|[^"\\\\])+(")`, 'g');
+      out = out.replace(re, '$1*********$2');
+    }
+
+    const cachedSettings = (this.account && this.account.settings) || ({} as any);
+    const cachedValues = [
+      cachedSettings.refresh_token,
+      cachedSettings.imap_password,
+      cachedSettings.smtp_password,
+    ].filter((v): v is string => typeof v === 'string' && v.length > 0);
+
+    for (const v of cachedValues) {
+      out = out.replaceAll(v, '*********');
+    }
+
+    return out;
+  }
+
   _spawnAndWait(mode, { onData }: { onData?: (data: any) => void } = {}) {
     return new Promise<{ response: any; buffer: Buffer }>((resolve, reject) => {
       this._spawnProcess(mode);
-      let buffer = Buffer.from([]);
+      // `bothChunks` is both streams together and is what we show the user when something
+      // goes wrong; `outChunks` is stdout alone, which is the only place the JSON result
+      // appears. Chunks are concatenated as bytes and decoded once at the end: `a += b` on
+      // two Buffers coerces both through toString(), which decodes every chunk on its own
+      // and mangles any multi-byte character that straddles a chunk boundary.
+      const bothChunks: Buffer[] = [];
+      const outChunks: Buffer[] = [];
 
       if (this._proc.stdout) {
-        this._proc.stdout.on('data', data => {
-          buffer += data;
+        this._proc.stdout.on('data', (data: Buffer) => {
+          bothChunks.push(data);
+          outChunks.push(data);
           if (onData) onData(data);
         });
       }
       if (this._proc.stderr) {
-        this._proc.stderr.on('data', data => {
-          buffer += data;
+        this._proc.stderr.on('data', (data: Buffer) => {
+          bothChunks.push(data);
           if (onData) onData(data);
         });
       }
 
-      this._proc.on('error', err => {
+      this._proc.on('error', (err: Error) => {
         reject(err);
       });
 
-      this._proc.on('close', code => {
-        const stripSecrets = text => {
-          const settings = (this.account && this.account.settings) || {
-            refresh_token: undefined,
-            imap_password: undefined,
-            smtp_password: undefined,
-          };
-          const { refresh_token, imap_password, smtp_password } = settings;
-
-          const escape = string => string.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
-          return (text || '')
-            .replace(new RegExp(escape(refresh_token || 'not-present'), 'g'), '*********')
-            .replace(new RegExp(escape(imap_password || 'not-present'), 'g'), '*********')
-            .replace(new RegExp(escape(smtp_password || 'not-present'), 'g'), '*********');
-        };
-
+      this._proc.on('close', (code, signal) => {
+        const buffer = Buffer.concat(bothChunks);
         try {
-          const lastLine = buffer
-            .toString('utf-8')
-            .split('\n')
-            .pop();
-          const response = JSON.parse(lastLine);
+          const response = lastJSONResponse(Buffer.concat(outChunks).toString('utf-8'));
+          if (!response) {
+            // If the Mailsync executable itself failed to run, the logs are not JSON
+            // and may contain system errors (shared library issues, etc). Include this
+            // in the logs so users can fix on their own or report detailed bugs.
+            const rawLog = this._stripSecrets(buffer.toString());
+            return reject(this._buildCrashError(code, signal, rawLog));
+          }
+
           if (code === 0) {
             resolve({ response, buffer });
           } else {
-            let msg = LocalizedErrorStrings[response.error] || response.error;
+            // Mailsync executed fine, and this is an mailsync error in JSON format
+            const isRecognizedMailsyncError = Object.prototype.hasOwnProperty.call(
+              LocalizedErrorStrings,
+              response.error
+            );
+            let msg = isRecognizedMailsyncError
+              ? LocalizedErrorStrings[response.error]
+              : response.error;
             if (response.error_service) {
               msg = `${msg} (${response.error_service.toUpperCase()})`;
             }
+            // Set only for a rejected TLS handshake today; arrives unlocalized.
+            if (response.error_advice) {
+              msg = `${msg} ${response.error_advice}`;
+            }
             const error = new Error(msg);
-            (error as any).rawLog = stripSecrets(response.log);
-            reject(error);
+            (error as any).rawLog = this._stripSecrets(response.log);
+            (error as any).errorAdvice = response.error_advice || null;
+            (error as any).errorService = response.error_service || null;
+            // Set when the engine classified the failure as this machine being unable to
+            // reach the network, rather than a server refusing or rejecting us.
+            (error as any).isNetworkError = response.error_offline === true;
+            // Errors mailsync explicitly classified (bad credentials, unreachable
+            // server, TLS/certificate problems, provider-side rate limits, etc.)
+            // describe the mail server or the user's settings, not a bug in
+            // Mailspring - except for the ambiguous codes above, which we still
+            // want reported if they occur. Callers that report unexpected errors
+            // to Sentry (e.g. oauth-signin-page's error handler) check this flag
+            // to avoid flooding error tracking with expected, user-actionable
+            // failures.
+            (error as any).isUserError =
+              isRecognizedMailsyncError && !AMBIGUOUS_MAILSYNC_ERRORS.has(response.error);
+            // Every classified error thrown here shares this one call site, so
+            // without an explicit fingerprint Sentry's stack-based grouping
+            // collapses unrelated failures (bad credentials, TLS errors, unknown
+            // mailsync error codes, etc.) into a single unactionable issue keyed
+            // off whichever message happened to report first. Group by the raw
+            // mailsync error code instead, which is what actually distinguishes
+            // one failure mode from another (see error-logger-extensions/sentry-error-reporter.js).
+            (error as any).fingerprint = [
+              'mailsync-classified-error',
+              response.error || 'unrecognized',
+              response.error_service || 'none',
+            ];
+            return reject(error);
           }
         } catch (err) {
-          const error = new Error(
-            `${localized(`An unknown error has occurred`)} (mailsync: ${code})`
-          );
-          (error as any).rawLog = stripSecrets(buffer.toString());
-          reject(error);
+          const rawLog = this._stripSecrets(buffer.toString());
+          return reject(this._buildCrashError(code, signal, rawLog));
         }
       });
     });
+  }
+
+  // Called when the mailsync child process wrote no parseable JSON result, meaning it
+  // crashed outright or never ran: a segfault inside mailcore, the executable-path check
+  // that exits 2, a missing shared library. The raw log is part of the message because
+  // those are diagnosable by the user or by whoever reads the bug report. A process
+  // terminated by a signal has a null `code`, which would otherwise read "mailsync: null".
+  _buildCrashError(code: number | null, signal: NodeJS.Signals | null, rawLog: string) {
+    const exitDescription = signal ? `signal ${signal}` : `${code}`;
+    const error = new Error(
+      `${localized(`An unknown error has occurred`)} mailsync: ${exitDescription}. ${rawLog}`
+    );
+    (error as any).rawLog = rawLog;
+    return error;
   }
 
   kill() {
@@ -267,10 +383,10 @@ export class MailsyncProcess extends EventEmitter {
   sync() {
     this._spawnProcess('sync');
     let outBuffer = '';
-    let errBuffer = null;
+    let errBuffer = '';
 
     if (this._proc.stdout) {
-      this._proc.stdout.on('data', data => {
+      this._proc.stdout.on('data', (data) => {
         const added = data.toString();
         try {
           outBuffer += added;
@@ -287,16 +403,47 @@ export class MailsyncProcess extends EventEmitter {
       });
     }
     if (this._proc.stderr) {
-      this._proc.stderr.on('data', data => {
-        errBuffer += data.toString();
+      this._proc.stderr.on('data', (data) => {
+        try {
+          errBuffer += data.toString();
+          // Trim to last 100KB if the buffer grows too large to avoid OOM
+          if (errBuffer.length > 100 * 1024) {
+            errBuffer = errBuffer.slice(-100 * 1024);
+          }
+        } catch (err) {
+          console.error(`Mailsync stderr buffer is ${errBuffer.length} chars, out of memory.`);
+          errBuffer = '';
+        }
       });
     }
-    this._proc.on('error', err => {
+    // Note: we intentionally do not re-emit this as an 'error' event on `this`.
+    // Nothing in the codebase attaches an 'error' listener to a MailsyncProcess
+    // instance, and Node's EventEmitter throws synchronously when an 'error'
+    // event has no listeners. That throw happened inside this same 'error'
+    // callback on `_proc`, which aborted the remaining `_proc.on('error', ...)`
+    // listener below (the one that actually cleans up and reports failure via
+    // 'close') before it could run — so a transient spawn failure (e.g. EIO)
+    // both crashed the app and prevented MailsyncBridge from ever marking the
+    // account as errored or retrying.
+    this._proc.on('error', (err: Error) => {
       console.log(`Sync worker exited with ${err}`);
-      this.emit('error', err);
     });
 
     let cleanedUp = false;
+
+    // Handle EPIPE and other stdin errors that occur when the child process
+    // exits while we're still trying to write to it. These errors are emitted
+    // asynchronously as 'error' events on stdin rather than thrown from write(),
+    // so the try/catch in sendMessage() does not catch them.
+    if (this._proc.stdin) {
+      this._proc.stdin.on('error', (err: Error) => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        this._proc.kill();
+        this.emit('close', { code: -2, error: err, signal: null });
+      });
+    }
+
     const onStreamCloseOrExit = (code: number, signal: string) => {
       if (cleanedUp) {
         return;
@@ -305,11 +452,20 @@ export class MailsyncProcess extends EventEmitter {
       let error = null;
       let lastJSON = null;
       try {
-        lastJSON = outBuffer.length && JSON.parse(outBuffer);
+        if (outBuffer.length) {
+          // Skip debug output that starts with 'dbg::' prefix
+          if (outBuffer.startsWith('dbg::')) {
+            console.log('Skipping debug output from mailsync:', this._stripSecrets(outBuffer));
+          } else {
+            lastJSON = JSON.parse(outBuffer);
+          }
+        }
+      } catch (parseError) {
+        console.warn('Failed to parse mailsync output as JSON:', this._stripSecrets(outBuffer));
       } finally {
         if (lastJSON) {
           if (lastJSON.error) {
-            error = new Error(lastJSON.error);
+            error = new Error(this._stripSecrets(lastJSON.error));
           } else {
             this.emit('deltas', [outBuffer]);
           }
@@ -317,14 +473,14 @@ export class MailsyncProcess extends EventEmitter {
       }
 
       if (errBuffer) {
-        error = new Error(errBuffer);
+        error = new Error(this._stripSecrets(errBuffer));
       }
 
       cleanedUp = true;
       this.emit('close', { code, error, signal } as MailsyncProcessExit);
     };
 
-    this._proc.on('error', error => {
+    this._proc.on('error', (error) => {
       if (cleanedUp) {
         return;
       }
@@ -344,7 +500,7 @@ export class MailsyncProcess extends EventEmitter {
     try {
       this._proc.stdin.write(msg, 'utf-8');
     } catch (error) {
-      if (error && error.message.includes('socket has been ended')) {
+      if (error && (error.message.includes('socket has been ended') || error.code === 'EPIPE')) {
         // The process probably already exited and we missed it somehow,
         // but try to kill it anyway and then force-emit a 'close' to trigger
         // the bridge to restart us.
@@ -358,13 +514,13 @@ export class MailsyncProcess extends EventEmitter {
     try {
       console.log('Running database migrations');
       const { buffer } = await this._spawnAndWait('migrate', {
-        onData: data => {
+        onData: (data) => {
           const str = data.toString().toLowerCase();
           if (str.includes('running migration')) this._showStatusWindow('migration');
           if (str.includes('running vacuum')) this._showStatusWindow('vacuum');
         },
       });
-      console.log(buffer.toString());
+      console.log(this._stripSecrets(buffer.toString()));
       this._closeStatusWindow();
     } catch (err) {
       this._closeStatusWindow();

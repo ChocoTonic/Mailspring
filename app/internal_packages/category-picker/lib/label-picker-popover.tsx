@@ -1,6 +1,4 @@
-/* eslint jsx-a11y/tabindex-no-positive: 0 */
 import React, { Component, CSSProperties } from 'react';
-import PropTypes from 'prop-types';
 import { Menu, RetinaImg, LabelColorizer, BoldedSearchResult } from 'mailspring-component-kit';
 import {
   Utils,
@@ -9,6 +7,7 @@ import {
   TaskQueue,
   Label,
   Account,
+  Category,
   SyncbackCategoryTask,
   ChangeLabelsTask,
   Thread,
@@ -30,11 +29,6 @@ export default class LabelPickerPopover extends Component<
   LabelPickerPopoverProps,
   LabelPickerPopoverState
 > {
-  static propTypes = {
-    threads: PropTypes.array.isRequired,
-    account: PropTypes.object.isRequired,
-  };
-
   _labels: Label[] = [];
   disposables: Rx.Disposable[];
 
@@ -47,9 +41,13 @@ export default class LabelPickerPopover extends Component<
     this._registerObservables();
   }
 
-  componentWillReceiveProps(nextProps) {
-    this._registerObservables(nextProps);
-    this.setState(this._recalculateState(nextProps));
+  componentDidUpdate(prevProps: LabelPickerPopoverProps) {
+    if (prevProps.account !== this.props.account || prevProps.threads !== this.props.threads) {
+      // Re-register observables when account/threads change.
+      // The subscription callback (_onLabelsChanged) will trigger setState
+      // with the new labels, so we don't need an explicit setState here.
+      this._registerObservables();
+    }
   }
 
   componentWillUnmount() {
@@ -59,15 +57,13 @@ export default class LabelPickerPopover extends Component<
   _registerObservables = (props = this.props) => {
     this._unregisterObservables();
     this.disposables = [
-      Categories.forAccount(props.account)
-        .sort()
-        .subscribe(this._onLabelsChanged),
+      Categories.forAccount(props.account).sort().subscribe(this._onLabelsChanged),
     ];
   };
 
   _unregisterObservables = () => {
     if (this.disposables) {
-      this.disposables.forEach(disp => disp.dispose());
+      this.disposables.forEach((disp) => disp.dispose());
     }
   };
 
@@ -78,15 +74,17 @@ export default class LabelPickerPopover extends Component<
       return { categoryData: [], searchValue };
     }
 
+    // Compile the search regex once and reuse it across the .filter below.
+    const searchRe = Utils.wordSearchRegExp(searchValue);
     const categoryData = this._labels
-      .filter(label => Utils.wordSearchRegExp(searchValue).test(label.displayName))
-      .map<CategoryData>(label => {
+      .filter((label) => searchRe.test(label.displayName))
+      .map<CategoryData>((label) => {
         return {
           id: label.id,
           category: label,
           displayName: label.displayName,
           backgroundColor: LabelColorizer.backgroundColorDark(label),
-          usage: threads.filter(t => t.categories.find(c => c.id === label.id)).length,
+          usage: threads.filter((t) => t.categories.find((c) => c.id === label.id)).length,
           numThreads: threads.length,
         };
       });
@@ -101,18 +99,21 @@ export default class LabelPickerPopover extends Component<
     return { categoryData, searchValue };
   };
 
-  _onLabelsChanged = categories => {
-    this._labels = categories.filter(c => {
+  _onLabelsChanged = (categories: Category[]) => {
+    this._labels = categories.filter((c) => {
       return c instanceof Label && !c.role;
-    });
-    this.setState(this._recalculateState());
+    }) as Label[];
+    // Use functional setState to preserve any pending searchValue updates from user typing
+    this.setState((prevState) =>
+      this._recalculateState(this.props, { searchValue: prevState.searchValue })
+    );
   };
 
   _onEscape = () => {
     Actions.closePopover();
   };
 
-  _onSelectLabel = item => {
+  _onSelectLabel = (item: CategoryData) => {
     const { account, threads } = this.props;
 
     if (threads.length === 0) return;
@@ -123,7 +124,7 @@ export default class LabelPickerPopover extends Component<
         accountId: account.id,
       });
 
-      TaskQueue.waitForPerformRemote(syncbackTask).then(finishedTask => {
+      TaskQueue.waitForPerformRemote(syncbackTask).then((finishedTask) => {
         if (!finishedTask.created) {
           AppEnv.showErrorDialog({ title: 'Error', message: `Could not create label.` });
           return;
@@ -160,11 +161,11 @@ export default class LabelPickerPopover extends Component<
     Actions.closePopover();
   };
 
-  _onSearchValueChange = event => {
+  _onSearchValueChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     this.setState(this._recalculateState(this.props, { searchValue: event.target.value }));
   };
 
-  _renderCheckbox = item => {
+  _renderCheckbox = (item: CategoryData) => {
     const styles: CSSProperties = {};
     let checkStatus;
     styles.backgroundColor = item.backgroundColor;
@@ -204,7 +205,7 @@ export default class LabelPickerPopover extends Component<
     );
   };
 
-  _renderCreateNewItem = ({ searchValue }) => {
+  _renderCreateNewItem = ({ searchValue }: CategoryData) => {
     return (
       <div className="category-item category-create-new">
         <RetinaImg
@@ -219,7 +220,7 @@ export default class LabelPickerPopover extends Component<
     );
   };
 
-  _renderItem = item => {
+  _renderItem = (item: CategoryData) => {
     if (item.divider) {
       return <Menu.Item key={item.id} divider={item.divider} />;
     } else if (item.newCategoryItem) {
@@ -240,7 +241,7 @@ export default class LabelPickerPopover extends Component<
     const headerComponents = [
       <input
         type="text"
-        tabIndex={1}
+        autoFocus
         key="textfield"
         className="search"
         placeholder={localized('Label as...')}
@@ -255,7 +256,7 @@ export default class LabelPickerPopover extends Component<
           headerComponents={headerComponents}
           footerComponents={[]}
           items={this.state.categoryData}
-          itemKey={item => item.id}
+          itemKey={(item) => item.id}
           itemContent={this._renderItem}
           onSelect={this._onSelectLabel}
           onEscape={this._onEscape}

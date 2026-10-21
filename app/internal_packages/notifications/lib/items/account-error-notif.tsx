@@ -33,23 +33,23 @@ export default class AccountErrorNotification extends React.Component<
     this.unlisten();
   }
 
-  _onContactSupport = erroredAccount => {
-    let url = 'https://support.getmailspring.com/hc/en-us/requests/new';
+  _onContactSupport = (erroredAccount: Account) => {
+    // Pre-fill a new topic in the community forum's Sync Issues category.
+    let url = 'https://community.getmailspring.com/new-topic?category=sync';
     if (erroredAccount) {
-      url += `?email=${encodeURIComponent(erroredAccount.emailAddress)}`;
       const { syncError } = erroredAccount;
       if (syncError != null) {
-        url += `&subject=${encodeURIComponent('Sync Error')}`;
-        const description = encodeURIComponent(
+        url += `&title=${encodeURIComponent('Sync Error')}`;
+        const body = encodeURIComponent(
           `Sync Error:\n\`\`\`\n${JSON.stringify(syncError, null, 2)}\n\`\`\``
         );
-        url += `&description=${description}`;
+        url += `&body=${body}`;
       }
     }
     shell.openExternal(url);
   };
 
-  _onReconnect = async account => {
+  _onReconnect = async (account: Account) => {
     ipcRenderer.send('command', 'application:add-account', {
       existingAccountJSON: await KeyManager.insertAccountSecrets(account),
     });
@@ -65,11 +65,11 @@ export default class AccountErrorNotification extends React.Component<
     this.setState({ checking: true });
     this._checkingTimeout = setTimeout(() => this.setState({ checking: false }), 10000);
 
-    accounts.forEach(acct => AppEnv.mailsyncBridge.forceRelaunchClient(acct));
+    accounts.forEach((acct) => AppEnv.mailsyncBridge.forceRelaunchClient(acct));
   }
 
   render() {
-    const erroredAccounts = this.state.accounts.filter(a => a.hasSyncStateError());
+    const erroredAccounts = this.state.accounts.filter((a) => a.hasSyncStateError());
     const checkAgainLabel = this.state.checking
       ? `${localized('Checking')}...`
       : localized('Check Again');
@@ -84,7 +84,8 @@ export default class AccountErrorNotification extends React.Component<
       actions = [
         {
           label: checkAgainLabel,
-          fn: () => this._onCheckAgain(AccountStore.accounts().filter(a => a.hasSyncStateError())),
+          fn: () =>
+            this._onCheckAgain(AccountStore.accounts().filter((a) => a.hasSyncStateError())),
         },
         {
           label: localized('Manage'),

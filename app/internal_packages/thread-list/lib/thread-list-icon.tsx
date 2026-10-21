@@ -1,86 +1,86 @@
 import React from 'react';
-import { localized, PropTypes, Actions, TaskFactory, ExtensionRegistry } from 'mailspring-exports';
+import { localized, Actions, TaskFactory, ExtensionRegistry } from 'mailspring-exports';
 import { ThreadWithMessagesMetadata } from './types';
 
-class ThreadListIcon extends React.Component<{ thread: ThreadWithMessagesMetadata }> {
-  static displayName = 'ThreadListIcon';
-  static propTypes = { thread: PropTypes.object };
+function nonDraftMessages(thread: ThreadWithMessagesMetadata) {
+  const msgs = thread.__messages;
+  if (!msgs || !(msgs instanceof Array)) {
+    return [];
+  }
+  return msgs.filter((m) => m.id && !m.draft);
+}
 
-  _extensionsIconClassNames = () => {
-    return ExtensionRegistry.ThreadList.extensions()
-      .filter(ext => ext.cssClassNamesForThreadListIcon != null)
-      .reduce((prev, ext) => prev + ' ' + ext.cssClassNamesForThreadListIcon(this.props.thread), '')
-      .trim();
-  };
+function iconClassNames(thread: ThreadWithMessagesMetadata) {
+  if (!thread) {
+    return 'thread-icon-star-on-hover';
+  }
 
-  _iconClassNames = () => {
-    if (!this.props.thread) {
-      return 'thread-icon-star-on-hover';
+  const extensionIconClassNames = ExtensionRegistry.ThreadList.extensions()
+    .filter((ext) => ext.cssClassNamesForThreadListIcon != null)
+    .reduce((prev, ext) => prev + ' ' + ext.cssClassNamesForThreadListIcon(thread), '')
+    .trim();
+  if (extensionIconClassNames.length > 0) {
+    return extensionIconClassNames;
+  }
+
+  if (thread.starred) {
+    return 'thread-icon-star';
+  }
+  if (thread.unread) {
+    return 'thread-icon-unread thread-icon-star-on-hover';
+  }
+
+  const msgs = nonDraftMessages(thread);
+  const last = msgs[msgs.length - 1];
+
+  if (msgs.length > 1 && (last.from[0] != null ? last.from[0].isMe() : undefined)) {
+    if (last.isForwarded()) {
+      return 'thread-icon-forwarded thread-icon-star-on-hover';
+    } else {
+      return 'thread-icon-replied thread-icon-star-on-hover';
     }
+  }
 
-    const extensionIconClassNames = this._extensionsIconClassNames();
-    if (extensionIconClassNames.length > 0) {
-      return extensionIconClassNames;
-    }
+  return 'thread-icon-none thread-icon-star-on-hover';
+}
 
-    if (this.props.thread.starred) {
-      return 'thread-icon-star';
-    }
+const ThreadListIcon: React.FC<{ thread: ThreadWithMessagesMetadata }> = React.memo(
+  ({ thread }) => {
+    const starred = thread && thread.starred;
+    const ariaLabel = starred ? localized('Unstar') : localized('Star');
 
-    if (this.props.thread.unread) {
-      return 'thread-icon-unread thread-icon-star-on-hover';
-    }
+    const onToggleStar = (event: React.MouseEvent | React.KeyboardEvent) => {
+      Actions.queueTask(
+        TaskFactory.taskForInvertingStarred({
+          threads: [thread],
+          source: 'Thread List Icon',
+        })
+      );
+      event.stopPropagation();
+    };
 
-    const msgs = this._nonDraftMessages();
-    const last = msgs[msgs.length - 1];
-
-    if (msgs.length > 1 && (last.from[0] != null ? last.from[0].isMe() : undefined)) {
-      if (last.isForwarded()) {
-        return 'thread-icon-forwarded thread-icon-star-on-hover';
-      } else {
-        return 'thread-icon-replied thread-icon-star-on-hover';
+    const onKeyDown = (event: React.KeyboardEvent) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        onToggleStar(event);
       }
-    }
+    };
 
-    return 'thread-icon-none thread-icon-star-on-hover';
-  };
-
-  _nonDraftMessages() {
-    let msgs = this.props.thread.__messages;
-    if (!msgs || !(msgs instanceof Array)) {
-      return [];
-    }
-    msgs = msgs.filter(m => m.id && !m.draft);
-    return msgs;
-  }
-
-  shouldComponentUpdate(nextProps) {
-    if (nextProps.thread === this.props.thread) {
-      return false;
-    }
-    return true;
-  }
-
-  render() {
     return (
       <div
-        className={`thread-icon ${this._iconClassNames()}`}
-        title={localized('Star')}
-        onClick={this._onToggleStar}
+        className={`thread-icon ${iconClassNames(thread)}`}
+        role="button"
+        tabIndex={-1}
+        aria-label={ariaLabel}
+        aria-pressed={starred || false}
+        title={ariaLabel}
+        onClick={onToggleStar}
+        onKeyDown={onKeyDown}
       />
     );
-  }
-
-  _onToggleStar = event => {
-    Actions.queueTask(
-      TaskFactory.taskForInvertingStarred({
-        threads: [this.props.thread],
-        source: 'Thread List Icon',
-      })
-    );
-    // Don't trigger the thread row click
-    return event.stopPropagation();
-  };
-}
+  },
+  (prev, next) => prev.thread === next.thread
+);
+ThreadListIcon.displayName = 'ThreadListIcon';
 
 export default ThreadListIcon;

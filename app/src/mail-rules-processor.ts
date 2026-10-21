@@ -19,6 +19,30 @@ import { ChangeLabelsTask } from './flux/tasks/change-labels-task';
 import { Message } from 'mailspring-exports';
 let MailRulesStore: typeof import('./flux/stores/mail-rules-store').default = null;
 type MailRule = import('./flux/stores/mail-rules-store').MailRule;
+type MailRuleAction = MailRule['actions'][number];
+
+const PERFORM_LOCAL_TIMEOUT_MS = 10000;
+
+/**
+Folder and label ids are hashes of the IMAP path, so a rename or a namespace
+prefix applied by the server after the rule was created leaves `action.value`
+pointing at an id that no longer exists. Fall back to the display name captured
+when the rule was saved. `displayName` is the full path with the INBOX / [Gmail]
+prefix removed, which makes it stable across exactly the prefix changes that
+cause the id to move.
+*/
+function resolveCategory(accountId: string, action: MailRuleAction) {
+  const byId = CategoryStore.byId(accountId, action.value);
+  if (byId || !action.valueName) {
+    return byId;
+  }
+  // Two folders can share a displayName (`Foo` and `INBOX/Foo`). Moving mail to
+  // the wrong one is worse than a disabled rule, so only an unambiguous match counts.
+  const byName = CategoryStore.categories(accountId).filter(
+    (c) => c.displayName === action.valueName
+  );
+  return byName.length === 1 ? byName[0] : undefined;
+}
 
 /**
 Note: At first glance, it seems like these task factory methods should use the
@@ -26,7 +50,11 @@ TaskFactory. Unfortunately, the TaskFactory uses the CategoryStore and other
 information about the current view. Maybe after the unified inbox refactor...
 */
 const MailRulesActions: {
-  [action: string]: (message: Message, thread: Thread, value: string) => undefined | Task | Promise<undefined> | Promise<Task>
+  [action: string]: (
+    message: Message,
+    thread: Thread,
+    action: MailRuleAction
+  ) => undefined | Task | Promise<undefined> | Promise<Task>;
 } = {
   markAsImportant: async (message, thread) => {
     const important = CategoryStore.getCategoryByRole(thread.accountId, 'important');
@@ -75,20 +103,20 @@ const MailRulesActions: {
     });
   },
 
-  forward: (message, thread, value) => {
+  forward: (message, thread, action) => {
     Actions.composeAndSendForward({
       thread: thread,
       message: message,
-      to: [new Contact({email: value})]
+      to: [new Contact({ email: action.value })],
     });
     return undefined;
   },
 
-  changeFolder: async (message, thread, value) => {
-    if (!value) {
+  changeFolder: async (message, thread, action) => {
+    if (!action.value) {
       throw new Error('A folder is required.');
     }
-    const folder = CategoryStore.byId(thread.accountId, value);
+    const folder = resolveCategory(thread.accountId, action);
     if (!folder || !(folder instanceof Folder)) {
       throw new Error('The folder could not be found.');
     }
@@ -99,11 +127,11 @@ const MailRulesActions: {
     });
   },
 
-  applyLabel: async (message, thread, value) => {
-    if (!value) {
+  applyLabel: async (message, thread, action) => {
+    if (!action.value) {
       throw new Error('A label is required.');
     }
-    const label = CategoryStore.byId(thread.accountId, value);
+    const label = resolveCategory(thread.accountId, action);
     if (!label || !(label instanceof Label)) {
       throw new Error('The label could not be found.');
     }
@@ -116,22 +144,26 @@ const MailRulesActions: {
   },
 
   archive: (message, thread) => {
+    const inbox = CategoryStore.getInboxCategory(thread.accountId);
+    if (!inbox) {
+      throw new Error('Could not find `inbox` label');
+    }
     return new ChangeLabelsTask({
       labelsToAdd: [],
-      labelsToRemove: [CategoryStore.getInboxCategory(thread.accountId)],
+      labelsToRemove: [inbox],
       threads: [thread],
       source: 'Mail Rules',
     });
   },
 
-  moveToLabel: async (message, thread, roleOrId) => {
-    if (!roleOrId) {
+  moveToLabel: async (message, thread, action) => {
+    if (!action.value) {
       throw new Error('A label is required.');
     }
 
-    const label = CategoryStore.categories(thread.accountId).find(
-      c => c.id === roleOrId || c.role === roleOrId
-    );
+    const label =
+      CategoryStore.categories(thread.accountId).find((c) => c.role === action.value) ||
+      resolveCategory(thread.accountId, action);
 
     if (!label || !(label instanceof Label)) {
       throw new Error('The label could not be found.');
@@ -140,7 +172,7 @@ const MailRulesActions: {
       source: 'Mail Rules',
       labelsToRemove: []
         .concat(thread.labels)
-        .filter(l => !l.isLockedCategory() && l.id !== label.id),
+        .filter((l) => !l.isLockedCategory() && l.id !== label.id),
       labelsToAdd: [label],
       threads: [thread],
     });
@@ -154,29 +186,57 @@ class MailRulesProcessor {
       return;
     }
 
-    const enabledRules = MailRulesStore.rules().filter(r => !r.disabled);
+    const enabledRules = MailRulesStore.rules().filter((r) => !r.disabled);
+    if (enabledRules.length === 0) {
+      return;
+    }
 
     // When messages arrive, we process all the messages in parallel, but one
     // rule at a time. This is important, because users can order rules which
     // may do and undo a change. Ie: "Star if from Ben, Unstar if subject is "Bla"
     for (const rule of enabledRules) {
-      let matching = messages.filter(message => this._checkRuleForMessage(rule, message));
+      try {
+        const allMatching = messages.filter((message) => this._checkRuleForMessage(rule, message));
 
-      // Rules are declared at the message level, but actions are applied to
-      // threads. To ensure we don't apply the same action 50x on the same thread,
-      // just process one match per thread.
-      matching = _.uniq(matching, false, message => message.threadId);
-      for (const message of matching) {
-        // We always pull the thread from the database, even though it may be in
-        // `incoming.thread`, because rules may be modifying it as they run!
-        const thread = await DatabaseStore.find<Thread>(Thread, message.threadId);
-        if (!thread) {
-          console.warn(`Cannot find thread ${message.threadId} to process mail rules.`);
-          continue;
+        // Rules are declared at the message level, but actions are applied to
+        // threads. To ensure we don't apply the same action 50x on the same thread,
+        // just process one match per thread.
+        const seenThreadIds = new Set<string>();
+        const matching = [];
+        for (const message of allMatching) {
+          if (!seenThreadIds.has(message.threadId)) {
+            seenThreadIds.add(message.threadId);
+            matching.push(message);
+          }
         }
-        await this._applyRuleToMessage(rule, message, thread);
+        for (const message of matching) {
+          // We always pull the thread from the database, even though it may be in
+          // `incoming.thread`, because rules may be modifying it as they run!
+          const thread = await DatabaseStore.find<Thread>(Thread, message.threadId);
+          if (!thread) {
+            console.warn(`Cannot find thread ${message.threadId} to process mail rules.`);
+            continue;
+          }
+          await this._applyRuleToMessage(rule, message, thread);
+        }
+      } catch (err) {
+        // Errors during condition evaluation (e.g. invalid regex) should disable
+        // the rule rather than crash the entire processor and block other rules.
+        Actions.disableMailRule(rule.id, err.toString());
       }
     }
+  }
+
+  _conditionTemplateMap: Map<string, (typeof ConditionTemplates)[number]> | null = null;
+
+  _getConditionTemplateMap() {
+    if (!this._conditionTemplateMap) {
+      this._conditionTemplateMap = new Map();
+      for (const t of ConditionTemplates) {
+        this._conditionTemplateMap.set(t.key, t);
+      }
+    }
+    return this._conditionTemplateMap;
   }
 
   _checkRuleForMessage(rule: MailRule, message: Message) {
@@ -186,8 +246,13 @@ class MailRulesProcessor {
       return false;
     }
 
-    return fn.call(rule.conditions, condition => {
-      const template = ConditionTemplates.find(t => t.key === condition.templateKey);
+    const templateMap = this._getConditionTemplateMap();
+    return fn.call(rule.conditions, (condition) => {
+      const template = templateMap.get(condition.templateKey);
+      if (!template) {
+        console.warn(`Unknown mail rule condition template: ${condition.templateKey}`);
+        return false;
+      }
       const value = template.valueForMessage(message);
       return template.evaluate(condition, value);
     });
@@ -195,25 +260,31 @@ class MailRulesProcessor {
 
   async _applyRuleToMessage(rule: MailRule, message: Message, thread: Thread) {
     try {
-      const actionPromises = rule.actions.map(action => {
+      const actionPromises = rule.actions.map((action) => {
         const actionFn = MailRulesActions[action.templateKey];
         if (!actionFn) {
           throw new Error(`${action.templateKey} is not a supported action.`);
         }
-        return actionFn(message, thread, action.value);
+        return actionFn(message, thread, action);
       });
 
       const actionResults = await Promise.all<Task | undefined>(actionPromises);
-      const actionTasks = actionResults.filter(r => r instanceof Task);
+      const actionTasks = actionResults.filter((r) => r instanceof Task);
 
       // mark that none of these tasks are undoable
-      actionTasks.forEach(t => {
+      actionTasks.forEach((t) => {
         (t as any).canBeUndone = false;
       });
 
-      const performLocalPromises = actionTasks.map(t => TaskQueue.waitForPerformLocal(t));
+      // Later rules read the thread back from the database, so they wait for these changes
+      // to land. The ceiling keeps an engine that never acknowledges the tasks (it exited
+      // mid-batch) from stalling every later rule and a reprocessing run.
+      const performLocalPromises = actionTasks.map((t) => TaskQueue.waitForPerformLocal(t));
       Actions.queueTasks(actionTasks);
-      await performLocalPromises;
+      await Promise.race([
+        Promise.all(performLocalPromises),
+        new Promise((resolve) => setTimeout(resolve, PERFORM_LOCAL_TIMEOUT_MS)),
+      ]);
     } catch (err) {
       // Errors can occur if a mail rule specifies an invalid label or folder, etc.
       // Disable the rule. Disable the mail rule so the failure is reflected in the

@@ -71,9 +71,10 @@ class ThreadListStore extends MailspringStore {
     // to advance to the adjacent thread. Nice and declarative.
     if (previous && next) {
       const focused = FocusedContentStore.focused('thread');
-      const keyboard = FocusedContentStore.keyboardCursor('thread');
+      const keyboard = FocusedContentStore.keyboardCursor('thread') as Thread | null;
       const viewModeAutofocuses =
-        WorkspaceStore.layoutMode() === 'split' || WorkspaceStore.topSheet().root === true;
+        FocusedPerspectiveStore.isShowingMail() &&
+        (WorkspaceStore.layoutMode() === 'split' || WorkspaceStore.topSheet().root === true);
 
       const nextQ = next.query();
       const matchers = nextQ && nextQ.matchers();
@@ -81,7 +82,7 @@ class ThreadListStore extends MailspringStore {
       const focusedIndex = focused ? previous.offsetOfId(focused.id) : -1;
       const keyboardIndex = keyboard ? previous.offsetOfId(keyboard.id) : -1;
 
-      const nextItemFromIndex = i => {
+      const nextItemFromIndex = (i: number) => {
         let nextIndex;
         if (
           i > 0 &&
@@ -96,7 +97,7 @@ class ThreadListStore extends MailspringStore {
         return next.modelAtOffset(nextIndex);
       };
 
-      const notInSet = function(model) {
+      const notInSet = function (model: Thread) {
         if (matchers) {
           return model.matches(matchers) === false;
         } else {

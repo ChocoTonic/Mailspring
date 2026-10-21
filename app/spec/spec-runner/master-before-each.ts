@@ -7,8 +7,6 @@ import {
   MailboxPerspective,
   FocusedPerspectiveStore,
 } from 'mailspring-exports';
-import { clipboard } from 'electron';
-
 import Config from '../../src/config';
 import * as configUtils from '../../src/config-utils';
 import TimeOverride from './time-override';
@@ -54,7 +52,6 @@ class MasterBeforeEach {
 
   _resetDatabase() {
     global.localStorage.clear();
-    DatabaseStore._transactionQueue = undefined;
 
     // If we don't spy on DatabaseStore._query, then
     // `DatabaseStore.inTransaction` will never complete and cause all
@@ -70,7 +67,7 @@ class MasterBeforeEach {
   _resetTaskQueue() {
     TaskQueue._queue = [];
     TaskQueue._completed = [];
-    TaskQueue._onlineStatus = true;
+    (TaskQueue as any)._onlineStatus = true;
   }
 
   _resetTimeOverride() {
@@ -80,16 +77,14 @@ class MasterBeforeEach {
 
   _resetAccountStore() {
     // Log in a fake user, and ensure that accountForId, etc. work
-    AccountStore._accounts = [
+    (AccountStore as any)._accounts = [
       new Account({
         provider: 'gmail',
         name: TestConstants.TEST_ACCOUNT_NAME,
         emailAddress: TestConstants.TEST_ACCOUNT_EMAIL,
         id: TestConstants.TEST_ACCOUNT_ID,
         aliases: [
-          `${TestConstants.TEST_ACCOUNT_NAME} Alternate <${
-            TestConstants.TEST_ACCOUNT_ALIAS_EMAIL
-          }>`,
+          `${TestConstants.TEST_ACCOUNT_NAME} Alternate <${TestConstants.TEST_ACCOUNT_ALIAS_EMAIL}>`,
         ],
       }),
 
@@ -132,10 +127,11 @@ class MasterBeforeEach {
 
   _resetClipboard() {
     let clipboardContent = 'initial clipboard content';
-    spyOn(clipboard, 'writeText').andCallFake(text => {
+    spyOn(navigator.clipboard, 'writeText').andCallFake((text) => {
       clipboardContent = text;
+      return Promise.resolve();
     });
-    spyOn(clipboard, 'readText').andCallFake(() => clipboardContent);
+    spyOn(navigator.clipboard, 'readText').andCallFake(() => Promise.resolve(clipboardContent));
   }
 }
 export default new MasterBeforeEach();

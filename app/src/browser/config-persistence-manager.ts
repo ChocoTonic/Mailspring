@@ -1,5 +1,5 @@
 import path from 'path';
-import fs from 'fs-plus';
+import fs from 'fs';
 import { BrowserWindow, dialog, app } from 'electron';
 import { atomicWriteFileSync } from '../fs-utils';
 import { localized } from '../intl';
@@ -30,9 +30,9 @@ export default class ConfigPersistenceManager {
 
   initializeConfigDirectory() {
     if (!fs.existsSync(this.configDirPath)) {
-      fs.makeTreeSync(this.configDirPath);
+      fs.mkdirSync(this.configDirPath, { recursive: true });
       const templateConfigDirPath = path.join(this.resourcePath, 'dot-mailspring');
-      fs.copySync(templateConfigDirPath, this.configDirPath);
+      fs.cpSync(templateConfigDirPath, this.configDirPath, { recursive: true });
     }
 
     try {
@@ -73,16 +73,12 @@ export default class ConfigPersistenceManager {
       buttons: [localized('Quit'), localized('Try Again'), localized('Reset Configuration')],
     });
 
-    switch (clickedIndex) {
-      case 0:
-        return 'quit';
-      case 1:
-        return 'tryagain';
-      case 2:
-        return 'reset';
-      default:
-        throw new Error('Unknown button clicked');
-    }
+    // On Windows, `cancelId` is ignored by Electron, so dismissing the dialog without
+    // clicking a button (eg: via the window's close button, Alt+F4, or Esc) can return
+    // an index outside 0-2. Treat that the same as "Quit" rather than throwing, since
+    // this runs synchronously during app startup and an uncaught error here prevents
+    // the app from launching at all.
+    return ['quit', 'tryagain', 'reset'][clickedIndex] || 'quit';
   }
 
   load() {
@@ -185,7 +181,7 @@ export default class ConfigPersistenceManager {
   emitChangeEvent = ({ sourceWebcontentsId }: { sourceWebcontentsId?: number } = {}) => {
     global.application.config.updateSettings(this.settings);
 
-    BrowserWindow.getAllWindows().forEach(win => {
+    BrowserWindow.getAllWindows().forEach((win) => {
       if (win.webContents && win.webContents.id !== sourceWebcontentsId) {
         win.webContents.send('on-config-reloaded', this.settings);
       }

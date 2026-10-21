@@ -1,8 +1,7 @@
 /* eslint global-require: 0 */
 import fs from 'fs';
 import React, { Component } from 'react';
-import PropTypes from 'prop-types';
-import { shell, ipcRenderer, remote } from 'electron';
+import { shell, ipcRenderer } from 'electron';
 import { EditableList } from 'mailspring-component-kit';
 import {
   localized,
@@ -11,6 +10,7 @@ import {
   Account,
   AccountAutoaddress,
 } from 'mailspring-exports';
+import { developerToolsAvailable } from '../../../../src/developer-tools';
 
 interface AutoaddressControlProps {
   autoaddress: AccountAutoaddress;
@@ -27,9 +27,10 @@ class AutoaddressControl extends Component<AutoaddressControlProps> {
         <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 3 }}>
           {localized('When composing, automatically')}
           <select
+            aria-label={localized('Automatically CC or BCC recipients')}
             style={{ marginTop: 0, marginLeft: 8 }}
             value={autoaddress.type}
-            onChange={e => onChange({ ...autoaddress, type: e.target.value as 'cc' | 'bcc' })}
+            onChange={(e) => onChange({ ...autoaddress, type: e.target.value as 'cc' | 'bcc' })}
             onBlur={onSaveChanges}
           >
             <option value="cc">{localized('Cc')}</option>
@@ -39,8 +40,9 @@ class AutoaddressControl extends Component<AutoaddressControlProps> {
         </div>
         <input
           type="text"
+          aria-label={localized('Comma-separated email addresses to automatically CC or BCC')}
           value={autoaddress.value}
-          onChange={e => onChange({ ...autoaddress, value: e.target.value })}
+          onChange={(e) => onChange({ ...autoaddress, value: e.target.value })}
           onBlur={onSaveChanges}
           placeholder={localized('Comma-separated email addresses')}
         />
@@ -52,24 +54,25 @@ class AutoaddressControl extends Component<AutoaddressControlProps> {
 class PreferencesAccountDetails extends Component<
   {
     account: Account;
+    isOffline: boolean;
     onAccountUpdated: (account: Account, newAccount: Account) => void;
   },
   {
     account: Account;
   }
 > {
-  static propTypes = {
-    account: PropTypes.object,
-    onAccountUpdated: PropTypes.func.isRequired,
-  };
-
   constructor(props) {
     super(props);
     this.state = { account: props.account.clone() };
   }
 
-  componentWillReceiveProps(nextProps) {
-    this.setState({ account: nextProps.account.clone() });
+  componentDidUpdate(prevProps: {
+    account: Account;
+    onAccountUpdated: (account: Account, newAccount: Account) => void;
+  }) {
+    if (prevProps.account !== this.props.account) {
+      this.setState({ account: this.props.account.clone() });
+    }
   }
 
   componentWillUnmount() {
@@ -87,7 +90,7 @@ class PreferencesAccountDetails extends Component<
    * @param {string} str - The string the user entered on the alias input
    * @param {object} [account=this.props.account] - The account object
    */
-  _makeAlias(str, account = this.props.account) {
+  _makeAlias(str: string, account = this.props.account) {
     const emailRegex = RegExpUtils.emailRegex();
     const match = emailRegex.exec(str);
     if (!match) {
@@ -112,24 +115,24 @@ class PreferencesAccountDetails extends Component<
     this.setState({ account }, callback);
   };
 
-  _setStateAndSave = updates => {
+  _setStateAndSave = (updates: Partial<Account>) => {
     this._setState(updates, () => {
       this._saveChanges();
     });
   };
 
   // Handlers
-  _onAccountAutoaddressUpdated = autoaddress => {
+  _onAccountAutoaddressUpdated = (autoaddress: AccountAutoaddress) => {
     this._setState({ autoaddress });
   };
 
-  _onAccountAliasCreated = newAlias => {
+  _onAccountAliasCreated = (newAlias: string) => {
     const coercedAlias = this._makeAlias(newAlias);
     const aliases = this.state.account.aliases.concat([coercedAlias]);
     this._setStateAndSave({ aliases });
   };
 
-  _onAccountAliasUpdated = (newAlias, alias, idx) => {
+  _onAccountAliasUpdated = (newAlias: string, alias: string, idx: number) => {
     const coercedAlias = this._makeAlias(newAlias);
     const aliases = this.state.account.aliases.slice();
     let defaultAlias = this.state.account.defaultAlias;
@@ -140,7 +143,7 @@ class PreferencesAccountDetails extends Component<
     this._setStateAndSave({ aliases, defaultAlias });
   };
 
-  _onAccountAliasRemoved = (alias, idx) => {
+  _onAccountAliasRemoved = (alias: string, idx: number) => {
     const aliases = this.state.account.aliases.slice();
     let defaultAlias = this.state.account.defaultAlias;
     if (defaultAlias === alias) {
@@ -150,7 +153,7 @@ class PreferencesAccountDetails extends Component<
     this._setStateAndSave({ aliases, defaultAlias });
   };
 
-  _onDefaultAliasSelected = event => {
+  _onDefaultAliasSelected = (event: React.ChangeEvent<HTMLSelectElement>) => {
     const defaultAlias = event.target.value === 'None' ? null : event.target.value;
     this._setStateAndSave({ defaultAlias });
   };
@@ -165,11 +168,20 @@ class PreferencesAccountDetails extends Component<
     AppEnv.mailsyncBridge.resetCacheForAccount(this.state.account);
   };
 
+  _onAddSharedMailbox = () => {
+    // Intentionally omits account secrets — the shared mailbox flow runs a fresh
+    // OAuth sign-in and only needs the provider to route to the right settings page.
+    ipcRenderer.send('command', 'application:add-account', {
+      existingAccountJSON: this.state.account.toJSON(),
+      o365SharedMailbox: true,
+    });
+  };
+
   _onManageContacts = () => {
     ipcRenderer.send('command', 'application:show-contacts', {});
   };
 
-  _onSetColor = colorChanged => {
+  _onSetColor = (colorChanged: Partial<Account>) => {
     // TODO: Ensure that the account color is updated in all places where it is displayed:
     // - internal_packages/composer/lib/account-contict-field.tsx
     // - internal_packages/contacts/lib/ContactsList.tsx
@@ -185,7 +197,7 @@ class PreferencesAccountDetails extends Component<
   };
 
   _onContactSupport = () => {
-    shell.openExternal('https://support.getmailspring.com/hc/en-us/requests/new');
+    shell.openExternal('https://community.getmailspring.com/c/sync/22');
   };
 
   _onShowErrorDetails = async () => {
@@ -224,6 +236,7 @@ class PreferencesAccountDetails extends Component<
       webPreferences: {
         javascript: false,
         nodeIntegration: false,
+        devTools: developerToolsAvailable(),
       },
     });
     win.loadURL(`file://${filepath}`);
@@ -231,9 +244,13 @@ class PreferencesAccountDetails extends Component<
 
   // Renderers
 
-  _renderErrorDetail(message, actions: { text: string; action: () => void }[]) {
+  _renderErrorDetail(
+    message,
+    actions: { text: string; action: () => void }[],
+    { offline }: { offline?: boolean } = {}
+  ) {
     return (
-      <div className="account-error-detail">
+      <div className={`account-error-detail${offline ? ' offline' : ''}`}>
         <div className="message">{message}</div>
         <div style={{ display: 'flex', flexShrink: 0 }}>
           {actions.map(({ text, action }) => (
@@ -272,7 +289,23 @@ class PreferencesAccountDetails extends Component<
           ]
         );
       default:
-        return null;
+        if (!this.props.isOffline) {
+          return null;
+        }
+        return this._renderErrorDetail(
+          localized(
+            `Mailspring can't connect to %@ and will keep retrying. This usually means your computer is offline. If your internet connection is working, your mail provider may be having trouble.`,
+            account.settings.imap_host || account.emailAddress
+          ),
+          [
+            {
+              text: localized('Try now'),
+              action: () => AppEnv.mailsyncBridge.sendSyncMailNow(),
+            },
+            { text: localized('Error Details...'), action: this._onShowErrorDetails },
+          ],
+          { offline: true }
+        );
     }
   }
 
@@ -285,19 +318,25 @@ class PreferencesAccountDetails extends Component<
     return (
       <div className="account-details">
         {this._renderSyncErrorDetails()}
-        <h6>{localized('Account Label')}</h6>
+        <label htmlFor="account-label">
+          <h6>{localized('Account Label')}</h6>
+        </label>
         <input
+          id="account-label"
           type="text"
           value={account.label}
           onBlur={this._saveChanges}
-          onChange={e => this._setState({ label: e.target.value })}
+          onChange={(e) => this._setState({ label: e.target.value })}
         />
-        <h6>{localized('Sender Name')}</h6>
+        <label htmlFor="account-sender-name">
+          <h6>{localized('Sender Name')}</h6>
+        </label>
         <input
+          id="account-sender-name"
           type="text"
           value={account.name}
           onBlur={this._saveChanges}
-          onChange={e => this._setState({ name: e.target.value })}
+          onChange={(e) => this._setState({ name: e.target.value })}
         />
         <h6>{localized('Automatic CC / BCC')}</h6>
         <AutoaddressControl
@@ -331,29 +370,37 @@ class PreferencesAccountDetails extends Component<
               ))}
             </select>
           </div>
-        ) : (
-          undefined
-        )}
-        <h6>{localized('Account Color')}</h6>
+        ) : undefined}
+        <label htmlFor="account-color">
+          <h6>{localized('Account Color')}</h6>
+        </label>
         <div style={{ display: 'flex', alignItems: 'flex-end' }}>
           <input
+            id="account-color"
             type="color"
             value={account.color}
             onBlur={this._saveChanges}
-            onChange={e => this._onSetColor({ color: e.target.value })}
+            onChange={(e) => this._onSetColor({ color: e.target.value })}
           />
           <div className="btn" style={{ marginLeft: 6 }} onClick={this._onResetColor}>
             {localized('Reset Account Color')}
           </div>
         </div>
         <h6>{localized('Account Settings')}</h6>
-        <div className="btn" onClick={this._onManageContacts}>
-          {localized('Manage Contacts')}
-        </div>
-        <div className="btn" style={{ marginLeft: 6 }} onClick={this._onReconnect}>
-          {account.provider === 'gmail'
-            ? localized('Re-authenticate...')
-            : localized('Update Connection Settings...')}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <div className="btn" onClick={this._onManageContacts}>
+            {localized('Manage Contacts')}
+          </div>
+          <div className="btn" onClick={this._onReconnect}>
+            {account.provider === 'gmail'
+              ? localized('Re-authenticate...')
+              : localized('Update Connection Settings...')}
+          </div>
+          {account.provider === 'office365' && (
+            <div className="btn" onClick={this._onAddSharedMailbox}>
+              {localized('Add Shared Mailbox...')}
+            </div>
+          )}
         </div>
         <h6>{localized('Local Data')}</h6>
         <div className="btn" onClick={this._onResetCache}>

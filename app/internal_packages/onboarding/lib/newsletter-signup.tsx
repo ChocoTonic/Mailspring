@@ -1,6 +1,5 @@
 import _ from 'underscore';
 import React from 'react';
-import PropTypes from 'prop-types';
 import { RetinaImg, Flexbox } from 'mailspring-component-kit';
 import { IdentityStore, localized, MailspringAPIRequest } from 'mailspring-exports';
 
@@ -18,10 +17,6 @@ export default class NewsletterSignup extends React.Component<
   NewsletterSignupState
 > {
   static displayName = 'NewsletterSignup';
-  static propTypes = {
-    name: PropTypes.string,
-    emailAddress: PropTypes.string,
-  };
 
   _mounted = false;
 
@@ -35,9 +30,9 @@ export default class NewsletterSignup extends React.Component<
     return this._onGetStatus();
   }
 
-  componentWillReceiveProps(nextProps) {
-    if (!_.isEqual(this.props, nextProps)) {
-      this._onGetStatus(nextProps);
+  componentDidUpdate(prevProps: NewsletterSignupProps) {
+    if (!_.isEqual(prevProps, this.props)) {
+      this._onGetStatus();
     }
   }
 

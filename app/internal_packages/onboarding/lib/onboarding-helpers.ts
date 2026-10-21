@@ -11,8 +11,7 @@ import {
 } from 'mailspring-exports';
 import MailspringProviderSettings from './mailspring-provider-settings.json';
 import MailcoreProviderSettings from './mailcore-provider-settings.json';
-import dns from 'dns';
-import fetch from 'node-fetch';
+import dns, { SrvRecord } from 'dns';
 import {
   GMAIL_CLIENT_ID,
   GMAIL_CLIENT_SECRET,
@@ -22,7 +21,9 @@ import {
   CODE_VERIFIER,
   GMAIL_SCOPES,
   CODE_CHALLENGE,
+  createOAuthState,
 } from './onboarding-constants';
+import { parseStringPromise } from 'xml2js';
 
 interface TokenResponse {
   access_token: string;
@@ -45,11 +46,7 @@ function idForAccount(emailAddress: string, connectionSettings) {
   };
 
   const idString = `${emailAddress}${JSON.stringify(settingsThatCouldChangeMailContents)}`;
-  return crypto
-    .createHash('sha256')
-    .update(idString, 'utf8')
-    .digest('hex')
-    .substr(0, 8);
+  return crypto.createHash('sha256').update(idString, 'utf8').digest('hex').substr(0, 8);
 }
 
 async function fetchPostWithFormBody<T>(url: string, body: { [key: string]: string }) {
@@ -78,21 +75,126 @@ function mxRecordsForDomain(domain) {
       if (err) {
         resolve([]);
       } else {
-        resolve(addresses.map(a => a.exchange.toLowerCase()));
+        resolve(addresses.map((a) => a.exchange.toLowerCase()));
       }
     });
   });
 }
 
+interface SRVService {
+  label: string;
+  security: 'SSL / TLS' | 'STARTTLS';
+}
+
+interface SRVServer {
+  host: string;
+  port: number;
+  security: SRVService['security'];
+}
+
+// RFC 6186 service labels, implicit TLS first as RFC 8314 §3 prefers. Every label requires
+// TLS, so a record can never downgrade the account to cleartext (RFC 8314 §5.1).
+const SRV_SERVICES: { imap: SRVService[]; smtp: SRVService[] } = {
+  imap: [
+    { label: '_imaps._tcp', security: 'SSL / TLS' },
+    { label: '_imap._tcp', security: 'STARTTLS' },
+  ],
+  smtp: [
+    { label: '_submissions._tcp', security: 'SSL / TLS' },
+    { label: '_submission._tcp', security: 'STARTTLS' },
+  ],
+};
+
+// SRV is queried after the MX lookup and autoconfig, so on a resolver that drops packets
+// c-ares' default of 4 tries per query would stack on top of the MX wait. A timed-out query
+// is handled like any other failure: no records.
+const SRV_TIMEOUT_MS = 2500;
+
+async function srvServerFor(domain: string, services: SRVService[]): Promise<SRVServer | null> {
+  const resolver = new dns.Resolver({ timeout: SRV_TIMEOUT_MS, tries: 1 });
+  const results = await Promise.all(
+    services.map(
+      (service) =>
+        new Promise<{ service: SRVService; records: SrvRecord[] }>((resolve) => {
+          resolver.resolveSrv(`${service.label}.${domain}`, (err, records) =>
+            resolve({ service, records: err ? [] : records })
+          );
+        })
+    )
+  );
+  for (const { service, records } of results) {
+    // A target of "." means the service is decidedly not offered (RFC 2782).
+    const usable = records.filter((r) => r.name && r.name !== '.' && r.port > 0);
+    if (usable.length === 0) continue;
+    // The lowest priority wins (RFC 2782). Weight spreads load across equal-priority
+    // targets; a one-time setup takes the heaviest instead of a random one.
+    usable.sort((a, b) => a.priority - b.priority || b.weight - a.weight);
+    return {
+      host: usable[0].name.toLowerCase().replace(/\.$/, ''),
+      port: usable[0].port,
+      security: service.security,
+    };
+  }
+  return null;
+}
+
+// Matches the account type presets ("yahoo") and common domains against data derived
+// from Thunderbird's ISPDB.
+function mailspringTemplateFor(domain: string, provider: string) {
+  const match = MailspringProviderSettings[domain] || MailspringProviderSettings[provider];
+  if (!match) return null;
+  return match.alias ? MailspringProviderSettings[match.alias] : match;
+}
+
+// Proton does not support nested folders outside its Folders/ and Labels/ namespaces, so
+// Proton accounts pin container_folder to "Folders" via the provider table.
+// https://protonmail.com/support/knowledge-base/creating-folders/#comment-10460
+function applyContainerFolderDefault(populated: Account) {
+  const containerFolderDefault = AccountStore.containerFolderDefaultGetter();
+  if (
+    containerFolderDefault !== 'Mailspring' &&
+    (populated.settings.container_folder === '' ||
+      populated.settings.container_folder === undefined)
+  ) {
+    populated.settings.container_folder = containerFolderDefault;
+  }
+  return populated;
+}
+
+// Exact or subdomain match, so lookalikes such as "evil-example.com" or
+// "example.com.attacker.net" are outside "example.com".
+export function isHostInDomain(host: string, domain: string) {
+  const normalized = host.toLowerCase().replace(/\.$/, '');
+  const base = domain.toLowerCase().replace(/\.$/, '');
+  return normalized === base || normalized.endsWith(`.${base}`);
+}
+
+// The distinct IMAP and SMTP hosts that are not within the account's email domain.
+export function serversOutsideDomain(account: Account): string[] {
+  const domain = account.emailAddress.split('@').pop();
+  const hosts = [account.settings.imap_host, account.settings.smtp_host]
+    .filter((host) => host && !isHostInDomain(host, domain))
+    .map((host) => host.toLowerCase().replace(/\.$/, ''));
+  return [...new Set(hosts)];
+}
+
+export interface ExpandedAccount {
+  account: Account;
+  // Servers from unsigned DNS SRV records outside the email's domain, which RFC 6186 §6 and
+  // RFC 8314 §5.1 say the user confirms before connecting.
+  confirmServers: boolean;
+}
+
 export async function expandAccountWithCommonSettings(account: Account) {
-  const domain = account.emailAddress
-    .split('@')
-    .pop()
-    .toLowerCase();
+  return (await expandAccountForSetup(account)).account;
+}
+
+export async function expandAccountForSetup(account: Account): Promise<ExpandedAccount> {
+  const domain = account.emailAddress.split('@').pop().toLowerCase();
   const mxRecords = await mxRecordsForDomain(domain);
   const populated = account.clone();
 
-  const usernameWithFormat = format => {
+  const usernameWithFormat = (format: string) => {
     if (format === 'email') return account.emailAddress;
     if (format === 'email-without-domain') return account.emailAddress.split('@').shift();
     return undefined;
@@ -101,7 +203,7 @@ export async function expandAccountWithCommonSettings(account: Account) {
   // find matching template using new Mailcore lookup tables. These match against the
   // email's domain and the mx records for the domain, which means it will identify that
   // "foundry376.com" uses Google Apps, for example.
-  const template = Object.values(MailcoreProviderSettings).find(p => {
+  const template = Object.values(MailcoreProviderSettings).find((p) => {
     for (const test of p['domain-match'] || []) {
       if (new RegExp(`^${test}$`).test(domain)) {
         return true;
@@ -109,7 +211,7 @@ export async function expandAccountWithCommonSettings(account: Account) {
     }
     for (const test of p['mx-match'] || []) {
       const reg = new RegExp(`^${test}$`);
-      if (mxRecords.some(record => reg.test(record))) {
+      if (mxRecords.some((record) => reg.test(record))) {
         return true;
       }
     }
@@ -125,66 +227,99 @@ export async function expandAccountWithCommonSettings(account: Account) {
       imap_port: imap.port,
       imap_username: usernameWithFormat('email'),
       imap_password: populated.settings.imap_password,
-      imap_security: imap.starttls ? 'STARTTLS' : imap.ssl ? 'SSL / TLS' : 'none',
+      imap_security: imap.starttls ? 'STARTTLS' : imap.ssl || imap.tls ? 'SSL / TLS' : 'none',
       imap_allow_insecure_ssl: false,
 
       smtp_host: (smtp.hostname || '').replace('{domain}', domain),
       smtp_port: smtp.port,
       smtp_username: usernameWithFormat('email'),
       smtp_password: populated.settings.smtp_password || populated.settings.imap_password,
-      smtp_security: smtp.starttls ? 'STARTTLS' : smtp.ssl ? 'SSL / TLS' : 'none',
+      smtp_security: smtp.starttls ? 'STARTTLS' : smtp.ssl || smtp.tls ? 'SSL / TLS' : 'none',
       smtp_allow_insecure_ssl: false,
 
       container_folder: '',
     };
     populated.settings = Object.assign(defaults, populated.settings);
-    return populated;
+    return { account: populated, confirmServers: false };
   }
 
-  // find matching template by domain or provider in the old lookup tables
-  // this matches the acccount type presets ("yahoo") and common domains against
-  // data derived from Thunderbirds ISPDB.
-  let mstemplate =
-    MailspringProviderSettings[domain] || MailspringProviderSettings[account.provider];
+  // Resolved before autoconfig is attempted: autoconfig describes IMAP/SMTP connectivity
+  // only, so any key the provider table owns has to come from the template either way.
+  let mstemplate = mailspringTemplateFor(domain, account.provider);
+
+  // An OAuth token is only accepted by its provider's servers. The servers in the domain's
+  // autoconfig file can be different ones, such as a mail server the domain used before.
+  if (!account.usesOAuth() && (await TryThunderbirdAutoconfig(populated, account, mstemplate))) {
+    return { account: applyContainerFolderDefault(populated), confirmServers: false };
+  }
+
+  let confirmServers = false;
   if (mstemplate) {
-    if (mstemplate.alias) {
-      mstemplate = MailspringProviderSettings[mstemplate.alias];
-    }
     console.log(`Using Mailspring Template: ${JSON.stringify(mstemplate, null, 2)}`);
   } else {
-    console.log(`Using Empty Template`);
-    mstemplate = {};
+    const [imap, smtp] = await Promise.all([
+      srvServerFor(domain, SRV_SERVICES.imap),
+      srvServerFor(domain, SRV_SERVICES.smtp),
+    ]);
+    confirmServers = [imap, smtp].some((server) => server && !isHostInDomain(server.host, domain));
+    if (imap || smtp) {
+      console.log(`Using SRV Records: ${JSON.stringify({ imap, smtp }, null, 2)}`);
+    } else {
+      console.log(`Using Fallback Template`);
+    }
+    mstemplate = {
+      imap_host: imap ? imap.host : `imap.${domain}`,
+      imap_port: imap?.port,
+      imap_security: imap?.security,
+      imap_user_format: 'email',
+      smtp_host: smtp ? smtp.host : `smtp.${domain}`,
+      smtp_port: smtp?.port,
+      smtp_security: smtp?.security,
+      smtp_user_format: 'email',
+      container_folder: '',
+    };
+  }
+
+  let imap_port = Number(mstemplate.imap_port);
+  let imap_security = mstemplate.imap_security;
+  if (!imap_security && !imap_port) {
+    imap_security = 'SSL / TLS';
+    imap_port = 993;
+  } else if (!imap_security && imap_port) {
+    imap_security = imap_port === 993 ? 'SSL / TLS' : 'none';
+  } else if (imap_security && !imap_port) {
+    imap_port = imap_security === 'SSL / TLS' ? 993 : 143;
+  }
+
+  let smtp_port = Number(mstemplate.smtp_port);
+  let smtp_security = mstemplate.smtp_security;
+  if (!smtp_security && !smtp_port) {
+    smtp_security = 'SSL / TLS';
+    smtp_port = 465;
+  } else if (!smtp_security && smtp_port) {
+    smtp_security = smtp_port === 587 ? 'STARTTLS' : smtp_port === 465 ? 'SSL / TLS' : 'none';
+  } else if (smtp_security && !smtp_port) {
+    smtp_port = smtp_security === 'STARTTLS' ? 587 : smtp_security === 'SSL / TLS' ? 465 : 25;
   }
 
   const defaults = {
-    imap_host: mstemplate.imap_host,
-    imap_port: mstemplate.imap_port || 993,
+    imap_host: mstemplate.imap_host.replace('%EMAILDOMAIN%', domain),
+    imap_port: imap_port,
     imap_username: usernameWithFormat(mstemplate.imap_user_format),
     imap_password: populated.settings.imap_password,
-    imap_security: mstemplate.imap_security || 'SSL / TLS',
+    imap_security: imap_security,
     imap_allow_insecure_ssl: mstemplate.imap_allow_insecure_ssl || false,
-    smtp_host: mstemplate.smtp_host,
-    smtp_port: mstemplate.smtp_port || 465,
+    smtp_host: mstemplate.smtp_host.replace('%EMAILDOMAIN%', domain),
+    smtp_port: smtp_port,
     smtp_username: usernameWithFormat(mstemplate.smtp_user_format),
     smtp_password: populated.settings.smtp_password || populated.settings.imap_password,
-    smtp_security: mstemplate.smtp_security || 'SSL / TLS',
+    smtp_security: smtp_security,
     smtp_allow_insecure_ssl: mstemplate.smtp_allow_insecure_ssl || false,
     container_folder: mstemplate.container_folder,
   };
   populated.settings = Object.assign(defaults, populated.settings);
 
-  // because protonmail do not support nested folders for now, returning escaped delimiters
-  // https://protonmail.com/support/knowledge-base/creating-folders/#comment-10460
-  // on protonmail by default Folders set as container folder
-  const containerFolderDefault = AccountStore.containerFolderDefaultGetter();
-  if (
-    containerFolderDefault !== 'Mailspring' &&
-    (populated.settings.container_folder === '' ||
-      populated.settings.container_folder === undefined)
-  ) {
-    populated.settings.container_folder = containerFolderDefault;
-  }
-  return populated;
+  return { account: applyContainerFolderDefault(populated), confirmServers };
 }
 
 export async function buildGmailAccountFromAuthResponse(code: string) {
@@ -196,6 +331,7 @@ export async function buildGmailAccountFromAuthResponse(code: string) {
       client_id: GMAIL_CLIENT_ID,
       client_secret: GMAIL_CLIENT_SECRET,
       redirect_uri: `http://127.0.0.1:${LOCAL_SERVER_PORT}`,
+      code_verifier: CODE_VERIFIER,
       grant_type: 'authorization_code',
     }
   );
@@ -231,13 +367,28 @@ export async function buildGmailAccountFromAuthResponse(code: string) {
   return account;
 }
 
-export async function buildO365AccountFromAuthResponse(code: string) {
+export async function buildO365AccountFromAuthResponse(
+  code: string,
+  sharedMailboxAddress?: string
+) {
+  return buildMicrosoftAccountFromAuthResponse(code, 'office365', sharedMailboxAddress);
+}
+
+export async function buildOutlookAccountFromAuthResponse(code: string) {
+  return buildMicrosoftAccountFromAuthResponse(code, 'outlook');
+}
+
+export async function buildMicrosoftAccountFromAuthResponse(
+  code: string,
+  provider: 'outlook' | 'office365',
+  sharedMailboxAddress?: string
+) {
   /// Exchange code for an access token
-  const { access_token, refresh_token } = await fetchPostWithFormBody<TokenResponse>(
+  const { access_token, refresh_token, id_token } = await fetchPostWithFormBody<TokenResponse>(
     `https://login.microsoftonline.com/common/oauth2/v2.0/token`,
     {
       code: code,
-      scope: O365_SCOPES.filter(f => !f.startsWith('https://outlook.office.com')).join(' '),
+      scope: O365_SCOPES.filter((f) => !f.startsWith('https://outlook.office.com')).join(' '),
       client_id: O365_CLIENT_ID,
       code_verifier: CODE_VERIFIER,
       grant_type: `authorization_code`,
@@ -255,23 +406,69 @@ export async function buildO365AccountFromAuthResponse(code: string) {
       `O365 profile request returned ${meResp.status} ${meResp.statusText}: ${JSON.stringify(me)}`
     );
   }
-  if (!me.mail) {
-    throw new Error(localized(`There is no email mailbox associated with this account.`));
+  // The Graph API can return 200 OK with an error body in some edge cases
+  if (me.error) {
+    throw new Error(`O365 profile request failed: ${me.error.code}: ${me.error.message}`);
+  }
+
+  // Try multiple sources to find the email address. For most work accounts `mail` or
+  // `userPrincipalName` is set. For personal MSA accounts or accounts without Exchange
+  // Online licenses, fall back to the id_token claims (requires openid+email scopes).
+  let emailAddress: string | null = me.mail || me.userPrincipalName || null;
+
+  if (!emailAddress && id_token) {
+    try {
+      // Decode id_token JWT payload (base64url encoded) to extract email claims
+      const payload = JSON.parse(Buffer.from(id_token.split('.')[1], 'base64').toString('utf8'));
+      const candidate: string = payload.email || payload.preferred_username || payload.unique_name;
+      // Only accept values that look like real email addresses (not GUID-based UPNs)
+      if (candidate && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(candidate)) {
+        emailAddress = candidate;
+      }
+    } catch {
+      // ignore token parsing errors
+    }
+  }
+
+  if (!emailAddress) {
+    // This is a user-configuration issue (account has no associated email mailbox),
+    // not a code bug. Tag it so the error reporter can skip Sentry for this case.
+    const err = new Error(localized(`There is no email mailbox associated with this account.`));
+    (err as any).isUserError = true;
+    throw err;
+  }
+
+  // A shared mailbox has no credentials of its own — it is accessed with the signed-in
+  // user's OAuth refresh token. IMAP accepts the shared mailbox as the XOAUTH2 identity
+  // (requires "Full Access"), but SMTP AUTH only accepts the signed-in user, who then
+  // submits mail as the shared address (requires "Send As"). So the shared address
+  // becomes the account email / IMAP username, while smtp_username stays the owner.
+  // smtp_verification: 'login' keeps the account-add test from sending a test email:
+  // reading a shared mailbox must not require send rights, and the test email would be
+  // visible to every member of the mailbox. create_helper_folders: false keeps the
+  // sync engine from provisioning "Mailspring/Snoozed" in the shared mailbox, which
+  // would also be visible to every member (snoozing is unavailable in that account).
+  const settings: any = {
+    refresh_client_id: O365_CLIENT_ID,
+    refresh_token: refresh_token,
+  };
+  if (sharedMailboxAddress) {
+    settings.smtp_username = emailAddress;
+    settings.smtp_verification = 'login';
+    settings.create_helper_folders = false;
+    emailAddress = sharedMailboxAddress;
   }
 
   const account = await expandAccountWithCommonSettings(
     new Account({
       name: me.displayName,
-      emailAddress: me.mail,
-      provider: 'office365',
-      settings: {
-        refresh_client_id: O365_CLIENT_ID,
-        refresh_token: refresh_token,
-      },
+      emailAddress: emailAddress,
+      provider: provider,
+      settings,
     })
   );
 
-  account.id = idForAccount(me.email, account.settings);
+  account.id = idForAccount(emailAddress, account.settings);
 
   // test the account locally to ensure the refresh token can be exchanged for an account token.
   await finalizeAndValidateAccount(account);
@@ -279,6 +476,7 @@ export async function buildO365AccountFromAuthResponse(code: string) {
   return account;
 }
 
+// Each call issues a new `state` value and invalidates the one on any URL built before it.
 export function buildGmailAuthURL() {
   return `https://accounts.google.com/o/oauth2/auth?${qs.stringify({
     client_id: GMAIL_CLIENT_ID,
@@ -286,6 +484,9 @@ export function buildGmailAuthURL() {
     response_type: 'code',
     scope: GMAIL_SCOPES.join(' '),
     access_type: 'offline',
+    code_challenge: CODE_CHALLENGE,
+    code_challenge_method: 'S256',
+    state: createOAuthState(),
     prompt: 'select_account consent',
   })}`;
 }
@@ -299,6 +500,7 @@ export function buildO365AuthURL() {
     response_mode: 'query',
     code_challenge: CODE_CHALLENGE,
     code_challenge_method: 'S256',
+    state: createOAuthState(),
     prompt: 'select_account',
   })}`;
 }
@@ -337,4 +539,143 @@ export async function finalizeAndValidateAccount(account: Account) {
   // Record the date of successful auth
   account.authedAt = new Date();
   return account;
+}
+
+async function TryThunderbirdAutoconfig(
+  populated: Account,
+  account: Account,
+  mstemplate: { container_folder?: string } | null
+) {
+  function extractServerDetails(
+    server: { hostname: string; port: string; username: string; socketType: string },
+    account: Account
+  ) {
+    const details = {
+      host: server.hostname,
+      port: server.port,
+      username: '',
+      security: '',
+    };
+
+    switch (server.username) {
+      case '%EMAILLOCALPART%':
+        details.username = account.emailAddress.split('@')[0];
+        break;
+      default:
+        details.username = account.emailAddress;
+        break;
+    }
+
+    switch (server.socketType) {
+      case 'plain':
+        details.security = 'None';
+        break;
+      case 'STARTTLS':
+        details.security = 'STARTTLS';
+        break;
+      case 'SSL':
+        details.security = 'SSL / TLS';
+        break;
+      default:
+        details.security = 'STARTTLS';
+        break;
+    }
+
+    return details;
+  }
+
+  const domain = account.emailAddress.split('@').pop().toLowerCase();
+
+  let url = `https://autoconfig.${domain}/mail/config-v1.1.xml`;
+  let autoConfig = await getThunderbirdAutoconfig(url);
+  if (autoConfig === false) {
+    url = `https://${domain}/.well-known/autoconfig/mail/config-v1.1.xml`;
+    autoConfig = await getThunderbirdAutoconfig(url);
+  }
+  // emailProvider could potentially be an array
+  // autoConfig can be null if the server returns 200 with an empty/unparseable XML body
+  if (autoConfig && autoConfig.emailProvider) {
+    let provider = autoConfig.emailProvider;
+    if (Array.isArray(provider)) {
+      provider = provider.find((p) => p.$.id === domain);
+      if (provider === undefined) {
+        return false;
+      }
+    }
+
+    if (provider.incomingServer === undefined || provider.outgoingServer === undefined)
+      return false;
+
+    let imapDetails = null;
+    let smtpDetails = null;
+
+    // Handle IMAP
+    if (Array.isArray(provider.incomingServer)) {
+      for (const incomingServer of provider.incomingServer) {
+        if (incomingServer.$.type === 'imap') {
+          imapDetails = extractServerDetails(incomingServer, account);
+          break;
+        }
+      }
+    } else if (provider.incomingServer.$.type === 'imap') {
+      imapDetails = extractServerDetails(provider.incomingServer, account);
+    }
+
+    // Handle SMTP
+    if (Array.isArray(provider.outgoingServer)) {
+      for (const outgoingServer of provider.outgoingServer) {
+        if (outgoingServer.$.type === 'smtp') {
+          smtpDetails = extractServerDetails(outgoingServer, account);
+          break;
+        }
+      }
+    } else if (provider.outgoingServer.$.type === 'smtp') {
+      smtpDetails = extractServerDetails(provider.outgoingServer, account);
+    }
+
+    const settings = {
+      imap_host: imapDetails?.host || `imap.${domain}`,
+      imap_port: imapDetails?.port,
+      imap_username: imapDetails?.username,
+      imap_password: populated.settings.imap_password,
+      imap_security: imapDetails?.security,
+      imap_allow_insecure_ssl: false,
+      smtp_host: smtpDetails?.host || `smtp.${domain}`,
+      smtp_port: smtpDetails?.port,
+      smtp_username: smtpDetails?.username,
+      smtp_password: populated.settings.smtp_password || populated.settings.imap_password,
+      smtp_security: smtpDetails?.security,
+      smtp_allow_insecure_ssl: false,
+      // Autoconfig describes servers only, so this non-connection setting stays the
+      // provider table's to supply: a Proton Bridge account needs "Folders" here whether
+      // or not its domain answers autoconfig.
+      container_folder: mstemplate?.container_folder || '',
+    };
+
+    populated.settings = Object.assign(settings, populated.settings);
+    console.log('Returning populated settings from autoconfig');
+    return populated;
+  } else {
+    return false;
+  }
+}
+
+async function getThunderbirdAutoconfig(url: string) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+
+    const body = await response.text();
+    const parsedBody = await parseStringPromise(body, {
+      explicitArray: false,
+      mergeAttrs: false,
+      explicitRoot: false,
+    });
+
+    return parsedBody;
+  } catch (error) {
+    return false;
+  }
 }

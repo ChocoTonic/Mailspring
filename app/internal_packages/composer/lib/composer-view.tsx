@@ -1,15 +1,17 @@
-
 import React from 'react';
 import ReactDOM from 'react-dom';
 import {
   localized,
-  PropTypes,
   Utils,
   Actions,
   DraftStore,
   DraftEditingSession,
   MessageWithEditorState,
+  DragDropTypes,
+  EmlUtils,
+  File,
 } from 'mailspring-exports';
+import { webUtils } from 'electron';
 import {
   DropZone,
   RetinaImg,
@@ -20,6 +22,7 @@ import {
   ComposerEditor,
   ComposerEditorPlaintext,
   ComposerSupport,
+  RovingTabIndexToolbar,
 } from 'mailspring-component-kit';
 import { ComposerHeader } from './composer-header';
 import { SendActionButton } from './send-action-button';
@@ -28,11 +31,8 @@ import { AttachmentsArea } from './attachments-area';
 import { QuotedTextControl } from './quoted-text-control';
 import Fields from './fields';
 
-const {
-  hasBlockquote,
-  hasNonTrailingBlockquote,
-  hideQuotedTextByDefault,
-} = ComposerSupport.BaseBlockPlugins;
+const { hasBlockquote, hasNonTrailingBlockquote, hideQuotedTextByDefault } =
+  ComposerSupport.BaseBlockPlugins;
 
 interface ComposerViewProps {
   draft: MessageWithEditorState;
@@ -43,6 +43,7 @@ interface ComposerViewState {
   quotedTextHidden: boolean;
   quotedTextPresent: boolean;
   isDropping: boolean;
+  attachingThreadCount: number;
 }
 // The ComposerView is a unique React component because it (currently) is a
 // singleton. Normally, the React way to do things would be to re-render the
@@ -50,21 +51,14 @@ interface ComposerViewState {
 export default class ComposerView extends React.Component<ComposerViewProps, ComposerViewState> {
   static displayName = 'ComposerView';
 
-  static propTypes = {
-    session: PropTypes.object.isRequired,
-    draft: PropTypes.object.isRequired,
-    className: PropTypes.string,
-  };
-
   _mounted = false;
   _mouseDownTarget: HTMLElement = null;
 
   dropzone = React.createRef<DropZone>();
   sendButton = React.createRef<SendActionButton>();
   focusContainer = React.createRef<KeyCommandsRegion & HTMLDivElement>();
-  editor:
-    | React.RefObject<ComposerEditorPlaintext>
-    | React.RefObject<ComposerEditor> = React.createRef<any>();
+  editor: React.RefObject<ComposerEditorPlaintext> | React.RefObject<ComposerEditor> =
+    React.createRef<any>();
   header = React.createRef<ComposerHeader>();
 
   _keymapHandlers = {
@@ -72,7 +66,7 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
     'composer:show-and-focus-bcc': () => this.header.current.showAndFocusField(Fields.Bcc),
     'composer:show-and-focus-cc': () => this.header.current.showAndFocusField(Fields.Cc),
     'composer:focus-to': () => this.header.current.showAndFocusField(Fields.To),
-    'composer:show-and-focus-from': () => { },
+    'composer:show-and-focus-from': () => {},
     'composer:select-attachment': () => this._onSelectAttachment(),
     'composer:delete-empty-draft': (e: Event) => {
       this.props.draft.pristine && this._onDestroyDraft();
@@ -87,6 +81,7 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
 
     this.state = {
       isDropping: false,
+      attachingThreadCount: 0,
       quotedTextPresent: hasBlockquote(draft.bodyEditorState),
       quotedTextHidden: hideQuotedTextByDefault(draft),
     };
@@ -97,7 +92,7 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
 
     this._mounted = true;
 
-    files.forEach(file => {
+    files.forEach((file) => {
       if (Utils.shouldDisplayAsImage(file)) {
         Actions.fetchFile(file);
       }
@@ -107,8 +102,11 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
     // so this will autoselect the draft if it has been edited or created in the last 3s.
     const isBrandNew = Date.now() - (date instanceof Date ? date.getTime() : Number(date)) < 3000;
     if (isBrandNew) {
-      (ReactDOM.findDOMNode(this) as HTMLElement).scrollIntoView(false);
-      window.requestAnimationFrame(() => this.focus());
+      const el = ReactDOM.findDOMNode(this) as HTMLElement;
+      window.requestAnimationFrame(() => {
+        el.scrollIntoView(false);
+        this.focus();
+      });
     }
   }
 
@@ -164,8 +162,8 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
                 value={draft.body}
                 propsForPlugins={{ draft, session }}
                 onFileReceived={this._onFileReceived}
-                onDrop={e => this.dropzone.current._onDrop(e)}
-                onChange={body => {
+                onDrop={(e) => this.dropzone.current._onDrop(e as React.DragEvent<HTMLDivElement>)}
+                onChange={(body) => {
                   session.changes.add({ body });
                 }}
               />
@@ -177,18 +175,20 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
                   className={quotedTextHidden && 'hiding-quoted-text'}
                   propsForPlugins={{ draft, session }}
                   onFileReceived={this._onFileReceived}
-                  onUpdatedSlateEditor={editor => session.setMountedEditor(editor)}
-                  onDrop={e => this.dropzone.current._onDrop(e)}
-                  onChange={change => {
+                  onUpdatedSlateEditor={(editor) => session.setMountedEditor(editor)}
+                  onDrop={(e) =>
+                    this.dropzone.current._onDrop(e as React.DragEvent<HTMLDivElement>)
+                  }
+                  onChange={(change) => {
                     // We minimize thrashing and support editors in multiple windows by ensuring
                     // non-value changes (eg focus) to the editorState don't trigger database saves
                     const skipSaving =
                       change.operations.size &&
                       change.operations.every(
-                        op =>
+                        (op) =>
                           op.type === 'set_selection' ||
                           (op.type === 'set_value' &&
-                            Object.keys(op.properties).every(k => k === 'decorations'))
+                            Object.keys(op.properties).every((k) => k === 'decorations'))
                       );
                     session.changes.add({ bodyEditorState: change.value }, { skipSaving });
                   }}
@@ -206,7 +206,7 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
               </>
             )}
 
-            <AttachmentsArea draft={draft} />
+            <AttachmentsArea draft={draft} attaching={this.state.attachingThreadCount > 0} />
           </div>
           <div className="composer-footer-region">
             <InjectedComponentSet
@@ -234,25 +234,28 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
   // separate mouseDown, mouseUp events because we need to ensure that the
   // start and end target are both not in the contenteditable. This ensures
   // that this behavior doesn't interfear with a click and drag selection.
-  _onMouseDownComposerBody = event => {
-    if (ReactDOM.findDOMNode(this.editor.current).contains(event.target)) {
+  _onMouseDownComposerBody = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (ReactDOM.findDOMNode(this.editor.current).contains(event.target as Node)) {
       this._mouseDownTarget = null;
     } else {
-      this._mouseDownTarget = event.target;
+      this._mouseDownTarget = event.target as HTMLElement;
     }
   };
 
-  _inFooterRegion(el) {
+  _inFooterRegion(el: HTMLElement) {
     return el.closest && el.closest('.composer-footer-region');
   }
 
-  _onMouseUpComposerBody = event => {
-    if (event.target === this._mouseDownTarget && !this._inFooterRegion(event.target)) {
+  _onMouseUpComposerBody = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (
+      event.target === this._mouseDownTarget &&
+      !this._inFooterRegion(event.target as HTMLElement)
+    ) {
       // We don't set state directly here because we want the native
       // contenteditable focus behavior. When the contenteditable gets focused
-      const bodyRect = (ReactDOM.findDOMNode(
-        this.editor.current
-      ) as HTMLElement).getBoundingClientRect();
+      const bodyRect = (
+        ReactDOM.findDOMNode(this.editor.current) as HTMLElement
+      ).getBoundingClientRect();
 
       if (event.pageY < bodyRect.top) {
         this.editor.current.focus();
@@ -267,7 +270,7 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
     this._mouseDownTarget = null;
   };
 
-  _shouldAcceptDrop = event => {
+  _shouldAcceptDrop = (event: React.DragEvent<HTMLDivElement>) => {
     // If the drag was initiated within Slate, let Slate handle it by falling through
     // and not preventing default. Slate can drag-drop image (void) nodes on it's own.
     if (event.dataTransfer.types.includes('application/x-slate-fragment')) {
@@ -279,10 +282,14 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
     const hasNativeFile = event.dataTransfer.types.includes('Files');
     const hasNonNativeFilePath = nonNativeFilePath !== null;
 
-    return hasNativeFile || hasNonNativeFilePath;
+    return hasNativeFile || hasNonNativeFilePath || this._hasThreadsForDrop(event);
   };
 
-  _nonNativeFilePathForDrop = event => {
+  _hasThreadsForDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    return event.dataTransfer.types.includes(DragDropTypes.ThreadsDragType);
+  };
+
+  _nonNativeFilePathForDrop = (event: React.DragEvent<HTMLDivElement>) => {
     if (event.dataTransfer.types.includes('text/mailspring-file-url')) {
       const downloadURL = event.dataTransfer.getData('text/mailspring-file-url');
       const downloadFilePath = downloadURL.split('file://')[1];
@@ -301,10 +308,10 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
     return null;
   };
 
-  _onDrop = event => {
+  _onDrop = (event: React.DragEvent<HTMLDivElement>) => {
     // Accept drops of real files from other applications
     for (const file of Array.from(event.dataTransfer.files)) {
-      this._onFileReceived((file as any).path);
+      this._onFileReceived(webUtils.getPathForFile(file));
       event.preventDefault();
     }
 
@@ -314,20 +321,88 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
       this._onFileReceived(uri);
       event.preventDefault();
     }
+
+    // dataTransfer is only valid for the duration of this handler, so read the
+    // payload now and hand the ids off to an async worker.
+    if (this._hasThreadsForDrop(event)) {
+      this._onThreadsReceived(event.dataTransfer.getData(DragDropTypes.ThreadsDragType));
+      event.preventDefault();
+    }
   };
 
-  _onFileReceived = filePath => {
+  _onThreadsReceived = async (json: string) => {
+    let threadIds: string[] = [];
+    try {
+      threadIds = JSON.parse(json).threadIds || [];
+    } catch (err) {
+      return;
+    }
+    if (!threadIds.length) {
+      return;
+    }
+
+    // Fetching the raw message from the sync engine is a remote round trip, so
+    // show a placeholder in the attachments area until the files land.
+    const dropCount = threadIds.length;
+    this.setState((state) => ({ attachingThreadCount: state.attachingThreadCount + dropCount }));
+
+    let staged: Array<{ filePath: string }> = [];
+    let unavailableThreadIds: string[] = [];
+    try {
+      ({ staged, unavailableThreadIds } = await EmlUtils.stageThreadsAsEml(threadIds));
+    } catch (err) {
+      AppEnv.reportError(err);
+    } finally {
+      if (this._mounted) {
+        this.setState((state) => ({
+          attachingThreadCount: state.attachingThreadCount - dropCount,
+        }));
+      }
+    }
+
+    if (!this._mounted) {
+      return;
+    }
+    for (const { filePath } of staged) {
+      Actions.addAttachment({
+        filePath,
+        headerMessageId: this.props.draft.headerMessageId,
+        // The attachment store copies the file into its own directory before
+        // this fires, so the staged copy is free to go.
+        onCreated: () => EmlUtils.discardStagedEml(filePath),
+      });
+    }
+
+    // A thread with nothing exportable in it and a fetch that failed are
+    // different problems, and only the second one is worth retrying.
+    const problems = [];
+    if (unavailableThreadIds.length) {
+      problems.push(
+        localized('One or more of the conversations have no message that can be attached.')
+      );
+    }
+    if (staged.length < threadIds.length - unavailableThreadIds.length) {
+      problems.push(
+        localized('One or more of the original messages could not be downloaded. Please try again.')
+      );
+    }
+    if (problems.length) {
+      AppEnv.showErrorDialog(problems.join('\n\n'));
+    }
+  };
+
+  _onFileReceived = (filePath: string) => {
     // called from onDrop and onFilePaste - assume images should be inline
     Actions.addAttachment({
       filePath: filePath,
       headerMessageId: this.props.draft.headerMessageId,
-      onCreated: file => {
+      onCreated: (file: File) => {
         if (!this._mounted) return;
         if (this.props.draft.plaintext) return;
 
         if (Utils.shouldDisplayAsImage(file)) {
           const { draft, session } = this.props;
-          const match = draft.files.find(f => f.id === file.id);
+          const match = draft.files.find((f) => f.id === file.id);
           if (!match) {
             return;
           }
@@ -342,7 +417,9 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
     });
   };
 
-  _isValidDraft = (options: { forceRecipientWarnings?: boolean, forceMiscWarnings?: boolean } = {}) => {
+  _isValidDraft = (
+    options: { forceRecipientWarnings?: boolean; forceMiscWarnings?: boolean } = {}
+  ) => {
     // We need to check the `DraftStore` because the `DraftStore` is
     // immediately and synchronously updated as soon as this function
     // fires. Since `setState` is asynchronous, if we used that as our only
@@ -380,17 +457,27 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
     if (recipientWarnings.length > 0 && !options.forceRecipientWarnings) {
       const response = dialog.showMessageBoxSync({
         type: 'warning',
-        buttons: [localized('Send Anyway'), localized('Send & Ignore Warnings For This Email'), localized('Cancel')],
+        buttons: [
+          localized('Send Anyway'),
+          localized('Send & Ignore Warnings For This Email'),
+          localized('Cancel'),
+        ],
         message: localized('Are you sure?'),
         detail: recipientWarnings.join('. '),
       });
       if (response === 0) {
         // response is button array index
-        return this._isValidDraft({ forceRecipientWarnings: true, forceMiscWarnings: options.forceMiscWarnings });
+        return this._isValidDraft({
+          forceRecipientWarnings: true,
+          forceMiscWarnings: options.forceMiscWarnings,
+        });
       } else if (response === 1) {
         // Send & Ignore Future Warnings for Recipient Email
-        session.addRecipientsToWarningBlacklist()
-        return this._isValidDraft({ forceRecipientWarnings: true, forceMiscWarnings: options.forceMiscWarnings });
+        session.addRecipientsToWarningBlacklist();
+        return this._isValidDraft({
+          forceRecipientWarnings: true,
+          forceMiscWarnings: options.forceMiscWarnings,
+        });
       }
       return false;
     }
@@ -403,7 +490,10 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
       });
       if (response === 0) {
         // response is button array index
-        return this._isValidDraft({ forceRecipientWarnings: options.forceRecipientWarnings, forceMiscWarnings: true });
+        return this._isValidDraft({
+          forceRecipientWarnings: options.forceRecipientWarnings,
+          forceMiscWarnings: true,
+        });
       }
       return false;
     }
@@ -461,9 +551,12 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
                 />
               </div>
 
-              <div className="composer-action-bar-wrap" data-tooltips-anchor>
+              <footer className="composer-action-bar-wrap" data-tooltips-anchor>
                 <div className="tooltips-container" />
-                <div className="composer-action-bar-content">
+                <RovingTabIndexToolbar
+                  label={localized('Composer Actions')}
+                  className="composer-action-bar-content"
+                >
                   <ActionBarPlugins
                     draft={this.props.draft}
                     session={this.props.session}
@@ -481,8 +574,8 @@ export default class ComposerView extends React.Component<ComposerViewProps, Com
                     draft={this.props.draft}
                     isValidDraft={this._isValidDraft}
                   />
-                </div>
-              </div>
+                </RovingTabIndexToolbar>
+              </footer>
             </DropZone>
           </TabGroupRegion>
         </KeyCommandsRegion>
@@ -523,3 +616,5 @@ const DeleteButton = (props: { onClick: () => void }) => (
     <RetinaImg name="icon-composer-trash.png" mode={RetinaImg.Mode.ContentIsMask} />
   </button>
 );
+// Note: tabIndex={-1} on individual buttons is intentional - the RovingTabIndexToolbar
+// wrapper manages which button has tabIndex={0} at any given time.

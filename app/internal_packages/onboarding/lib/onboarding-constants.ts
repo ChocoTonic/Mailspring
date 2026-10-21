@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import uuidv4 from 'uuid/v4';
 
 export const LOCAL_SERVER_PORT = 12141;
 
@@ -17,14 +16,16 @@ export const GMAIL_CLIENT_ID =
 // Note: This is not a security risk for the end-user -- it just means someone could "fork" Mailspring and re-use it's
 // Client ID and Secret. For now, it seems we're on the honor code - Please don't do this.
 //
-export const GMAIL_CLIENT_SECRET = process.env.MS_GMAIL_CLIENT_SECRET || crypto
-  .createDecipheriv(
-    'aes-256-ctr',
-    "don't-be-ev1l-thanks--mailspring",
-    Buffer.from('wgvAx+N05nHqhFxJ9I07jw==', 'base64')
-  )
-  .update(Buffer.from('1EyEGYVh3NBNIbYEdpdMvOzCH7+vrSciGeYZ1F+W6W+yShk=', 'base64'))
-  .toString('utf8');
+export const GMAIL_CLIENT_SECRET =
+  process.env.MS_GMAIL_CLIENT_SECRET ||
+  crypto
+    .createDecipheriv(
+      'aes-256-ctr',
+      "don't-be-ev1l-thanks--mailspring",
+      Buffer.from('wgvAx+N05nHqhFxJ9I07jw==', 'base64')
+    )
+    .update(Buffer.from('1EyEGYVh3NBNIbYEdpdMvOzCH7+vrSciGeYZ1F+W6W+yShk=', 'base64'))
+    .toString('utf8');
 
 export const GMAIL_SCOPES = [
   'https://mail.google.com/', // email
@@ -38,7 +39,10 @@ export const O365_CLIENT_ID =
   process.env.MS_O365_CLIENT_ID || '8787a430-6eee-41e1-b914-681d90d35625';
 
 export const O365_SCOPES = [
-  'user.read', // email address
+  'openid', // required for id_token to be returned
+  'email', // email claim in id_token
+  'profile', // displayName / name claims in id_token
+  'user.read', // email address via Graph /me
   'offline_access',
   'Contacts.ReadWrite', // contacts
   'Contacts.ReadWrite.Shared', // contacts
@@ -56,7 +60,16 @@ export const O365_SCOPES = [
 
 // Re-created only at onboarding page load / auth session start because storing
 // verifier would require additional state refactoring
-export const CODE_VERIFIER = uuidv4();
+//
+// 32 random bytes base64url-encode to exactly 43 characters, the minimum length
+// RFC 7636 §4.1 allows (`code-verifier = 43*128unreserved`). A UUID is only 36
+// characters and authorization servers that enforce the minimum reject it.
+export const CODE_VERIFIER = crypto
+  .randomBytes(32)
+  .toString('base64')
+  .replace(/\+/g, '-')
+  .replace(/\//g, '_')
+  .replace(/=/g, '');
 export const CODE_CHALLENGE = crypto
   .createHash('sha256')
   .update(CODE_VERIFIER, 'utf8')
@@ -64,3 +77,23 @@ export const CODE_CHALLENGE = crypto
   .replace(/\+/g, '-')
   .replace(/\//g, '_')
   .replace(/=/g, '');
+
+// Carried alongside PKCE as defense in depth per RFC 6749 §10.12: the authorization
+// server echoes it on the redirect, and a callback that does not carry the value from
+// the most recently built authorization URL aborts the sign-in instead of exchanging
+// the code.
+let latestOAuthState: string | null = null;
+
+export function createOAuthState(): string {
+  latestOAuthState = crypto
+    .randomBytes(32)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+  return latestOAuthState;
+}
+
+export function getLatestOAuthState(): string | null {
+  return latestOAuthState;
+}

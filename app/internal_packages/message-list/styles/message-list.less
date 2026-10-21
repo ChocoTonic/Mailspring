@@ -20,9 +20,9 @@ body.platform-win32 {
       padding: 0 5px;
       .windows-btn-bg;
       &:hover {
-        background: #e5e5e5;
+        background: @background-secondary;
       }
-      &.btn-icon:hover {
+      &.btn-bare:hover {
         color: @text-color;
         img.content-mask {
           background: rgba(35, 31, 32, 0.8);
@@ -33,7 +33,7 @@ body.platform-win32 {
       margin: 0 0 0 1px;
       padding: 0 5px;
       .windows-btn-bg;
-      &.btn-icon:hover {
+      &.btn-bare:hover {
         color: @text-color;
         img.content-mask {
           background: rgba(35, 31, 32, 0.8);
@@ -88,6 +88,7 @@ body.platform-win32 {
   }
   .message-toolbar-arrow.up {
     order: 202;
+    margin-left: 2px;
     // <1 because of hit region padding on the button
     margin-right: @spacing-standard * 0.75;
   }
@@ -219,6 +220,7 @@ body.platform-win32 {
     font-size: @font-size-large;
     color: @text-color;
     margin-right: @spacing-standard;
+    overflow-wrap: anywhere;
   }
   .message-icons-wrap {
     flex-shrink: 0;
@@ -429,6 +431,10 @@ body.platform-win32 {
         font-weight: @font-weight-normal;
         margin-left: 0;
       }
+
+      .message-folder-chip + .message-folder-chip::before {
+        content: ', ';
+      }
     }
 
     .message-actions-wrap {
@@ -583,7 +589,7 @@ body.platform-win32 {
 
 .download-all {
   @download-btn-color: fadeout(#929292, 20%);
-  @download-hover-color: fadeout(@component-active-color, 20%);
+  @download-hover-color: rgb(from @component-active-color r g b / 80%);
 
   display: flex;
   align-items: center;
@@ -645,7 +651,7 @@ body.platform-win32 {
   }
 
   .from-contact {
-    font-weight: @headings-font-weight;
+    font-weight: @font-weight-semi-bold;
     color: @text-color;
   }
   .from-label,
@@ -811,5 +817,66 @@ body.platform-win32 {
   .flexbox-handle-horizontal div {
     border-right: 0;
     width: 1px;
+  }
+}
+
+//////////////////////////
+// sidebar-panels       //
+//////////////////////////
+// Switcher between the Participants panel and any `MessageListSidebar:Panel` providers. While a
+// non-Participants panel is active, every other component in the sidebar column is hidden and the
+// panel fills the column.
+.sidebar-panels {
+  display: flex;
+  flex-direction: column;
+
+  &.panel-active {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .sidebar-panel-switcher {
+    display: flex;
+    margin: 10px 5px 5px 5px;
+    padding: 2px;
+    border-radius: @border-radius-base;
+    background: fade(@text-color, 6%);
+  }
+
+  .sidebar-panel-tab {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 3px 8px;
+    border: 0;
+    border-radius: @border-radius-small;
+    background: transparent;
+    color: @text-color-subtle;
+    font-size: 12px;
+    cursor: default;
+
+    &:hover {
+      color: @text-color;
+    }
+    &.active {
+      background: @background-primary;
+      color: @text-color;
+      box-shadow: 0 0.5px 1.5px rgba(0, 0, 0, 0.2);
+    }
+  }
+
+  .sidebar-panel {
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+  }
+}
+
+.column-MessageListSidebar,
+.view-reading-pane-sidebar {
+  :has(> .sidebar-panels.panel-active) > :not(.sidebar-panels) {
+    display: none !important;
   }
 }

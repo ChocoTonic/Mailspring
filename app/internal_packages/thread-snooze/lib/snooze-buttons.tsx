@@ -1,32 +1,32 @@
 import React, { Component } from 'react';
-import PropTypes from 'prop-types';
 import ReactDOM from 'react-dom';
 import { Actions, FocusedPerspectiveStore, Thread } from 'mailspring-exports';
-import { RetinaImg, BindGlobalCommands } from 'mailspring-component-kit';
+import { RetinaImg, BindGlobalCommands, RovingTabIndexToolbar } from 'mailspring-component-kit';
 import SnoozePopover from './snooze-popover';
+
+interface BoundingRect {
+  height: number;
+  width: number;
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
 
 interface SnoozeButtonProps {
   className: string;
   threads: Thread[];
   direction: string;
   shouldRenderIconImg: boolean;
-  getBoundingClientRect: (inst: any) => ClientRect;
+  getBoundingClientRect: (inst?: any) => BoundingRect;
 }
 
 class SnoozeButton extends Component<SnoozeButtonProps> {
-  static propTypes = {
-    className: PropTypes.string,
-    threads: PropTypes.array,
-    direction: PropTypes.string,
-    shouldRenderIconImg: PropTypes.bool,
-    getBoundingClientRect: PropTypes.func,
-  };
-
   static defaultProps = {
     className: 'btn btn-toolbar',
     direction: 'down',
     shouldRenderIconImg: true,
-    getBoundingClientRect: inst =>
+    getBoundingClientRect: (inst) =>
       (ReactDOM.findDOMNode(inst) as HTMLElement).getBoundingClientRect(),
   };
 
@@ -61,10 +61,6 @@ class SnoozeButton extends Component<SnoozeButtonProps> {
 export class QuickActionSnooze extends Component<{ thread: Thread }> {
   static displayName = 'QuickActionSnooze';
 
-  static propTypes = {
-    thread: PropTypes.object,
-  };
-
   static containerRequired = false;
 
   getBoundingClientRect = () => {
@@ -96,10 +92,6 @@ export class QuickActionSnooze extends Component<{ thread: Thread }> {
 export class ToolbarSnooze extends Component<{ items: Thread[] }> {
   static displayName = 'ToolbarSnooze';
 
-  static propTypes = {
-    items: PropTypes.array,
-  };
-
   static containerRequired = false;
 
   _btn: SnoozeButton;
@@ -109,9 +101,11 @@ export class ToolbarSnooze extends Component<{ items: Thread[] }> {
       return <span />;
     }
     return (
-      <BindGlobalCommands commands={{ 'core:snooze-item': () => this._btn.onClick() }}>
-        <SnoozeButton threads={this.props.items} ref={b => (this._btn = b)} />
-      </BindGlobalCommands>
+      <RovingTabIndexToolbar label="Snooze" className="button-group">
+        <BindGlobalCommands commands={{ 'core:snooze-item': () => this._btn.onClick() }}>
+          <SnoozeButton threads={this.props.items} ref={(b) => (this._btn = b)} />
+        </BindGlobalCommands>
+      </RovingTabIndexToolbar>
     );
   }
 }

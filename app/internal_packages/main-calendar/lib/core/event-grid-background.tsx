@@ -7,6 +7,8 @@ interface EventGridBackgroundProps {
   height: number;
   numColumns: number;
   intervalHeight: number;
+  /** See MailspringCalendarViewProps.paintVersion; the canvas reads the theme's line colours only when it paints. */
+  paintVersion: string;
 }
 
 export class EventGridBackground extends React.Component<EventGridBackgroundProps> {
@@ -18,7 +20,7 @@ export class EventGridBackground extends React.Component<EventGridBackgroundProp
     this._renderEventGridBackground();
   }
 
-  shouldComponentUpdate(nextProps, nextState) {
+  shouldComponentUpdate(nextProps: EventGridBackgroundProps, nextState: Record<string, never>) {
     return !Utils.isEqualReact(nextProps, this.props) || !Utils.isEqualReact(nextState, this.state);
   }
 
@@ -33,7 +35,8 @@ export class EventGridBackground extends React.Component<EventGridBackgroundProp
     const height = this.props.height;
     canvas.height = height;
 
-    const doStroke = (type, strokeStyle) => {
+    const wrapStyle = getComputedStyle(canvas.parentElement);
+    const doStroke = (type: 'major' | 'minor', strokeStyle: string) => {
       ctx.strokeStyle = strokeStyle;
       ctx.beginPath();
       for (const { y } of tickGenerator(type, this.props.intervalHeight)) {
@@ -43,8 +46,8 @@ export class EventGridBackground extends React.Component<EventGridBackgroundProp
       ctx.stroke();
     };
 
-    doStroke('minor', '#f1f1f1'); // Minor Ticks
-    doStroke('major', '#e0e0e0'); // Major ticks
+    doStroke('minor', wrapStyle.getPropertyValue('--grid-line-minor').trim() || '#f1f1f1');
+    doStroke('major', wrapStyle.getPropertyValue('--grid-line-major').trim() || '#e0e0e0');
   }
 
   onMouseMove(e: React.MouseEvent<HTMLDivElement, MouseEvent>) {

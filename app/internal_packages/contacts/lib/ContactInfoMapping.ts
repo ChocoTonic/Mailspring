@@ -1,6 +1,7 @@
 import vCard from 'vcf';
 import { ContactInfoGoogle, ContactInfoVCF, Contact, Utils } from 'mailspring-exports';
 import * as VCFHelpers from './VCFHelpers';
+import { displayNameForContact } from './ContactDisplayName';
 
 /**
 This file contains business logic that maps two separate "contact.info" formats onto
@@ -35,6 +36,7 @@ export interface ContactBase {
     extendedAddress: string;
   }[];
   birthdays?: { date: { year: number; month: number; day: number } }[];
+  notes?: string;
 }
 
 export interface ContactInteractorMetadata {
@@ -53,14 +55,19 @@ function safeParseVCard(vcard: string) {
 
   // ensure the VERSION line is the first line after BEGIN.
   // FastMail (and maybe others) do not honor the spec's order.
-  const version = vcard.match(/\r\nVERSION:[ \d.]+\r\n/)[0];
-  vcard = vcard.replace(/\r\nVERSION:[ \d.]+\r\n/, '\r\n');
-  vcard = vcard.replace(`BEGIN:VCARD\r\n`, `BEGIN:VCARD${version}`);
+  const versionMatch = vcard.match(/\r\nVERSION:[ \d.]+\r\n/);
+  if (versionMatch) {
+    vcard = vcard.replace(/\r\nVERSION:[ \d.]+\r\n/, '\r\n');
+    vcard = vcard.replace(`BEGIN:VCARD\r\n`, `BEGIN:VCARD${versionMatch[0]}`);
+  }
   return new vCard().parse(vcard);
 }
 
 /** Parse a Contact with no `info` into the shared details format. */
-export function fromContact({ name, email }: Contact): ContactParseResult {
+export function fromContact(contact: Contact): ContactParseResult {
+  const { email } = contact;
+  const displayName = displayNameForContact(contact);
+  const name = displayName === email ? '' : displayName;
   const nameParts = name.split(' ');
 
   return {
@@ -100,12 +107,19 @@ export function fromVCF(info: ContactInfoVCF): ContactParseResult {
   const emails = VCFHelpers.asArray(card.get('email'));
   const urls = VCFHelpers.asArray(card.get('url'));
   const bday = VCFHelpers.asSingle(card.get('bday'));
+  const note = VCFHelpers.asSingle(card.get('note'));
 
   let photoURL = photo ? photo._data : undefined;
-  if (photoURL && new URL(photoURL).host.endsWith('contacts.icloud.com')) {
-    // connecting to iCloud for contact photos requires authentication
-    // and it's difficult to reach from here. No photos for now :(
-    photoURL = undefined;
+  if (photoURL) {
+    try {
+      if (new URL(photoURL).host.endsWith('contacts.icloud.com')) {
+        // connecting to iCloud for contact photos requires authentication
+        // and it's difficult to reach from here. No photos for now :(
+        photoURL = undefined;
+      }
+    } catch {
+      // malformed or non-http URL (e.g. data: URI) — not an iCloud URL, keep as-is
+    }
   }
 
   return {
@@ -121,11 +135,12 @@ export function fromVCF(info: ContactInfoVCF): ContactParseResult {
       phoneNumbers: VCFHelpers.parseValueAndTypeCollection(tels),
       emailAddresses: VCFHelpers.parseValueAndTypeCollection(emails),
       urls: VCFHelpers.parseValueAndTypeCollection(urls),
-      addresses: adrs.length > 0 && adrs.map(item => VCFHelpers.parseAddress(item)),
+      addresses: adrs.length > 0 && adrs.map((item) => VCFHelpers.parseAddress(item)),
       birthdays:
         bday && (!bday.value || bday.value === 'date')
           ? [{ date: VCFHelpers.parseBirthday(bday._data) }]
           : undefined,
+      notes: note ? note._data.replace(/\\n/g, '\n') : undefined,
     },
   };
 }
@@ -150,7 +165,11 @@ export function applyToVCF(contact: Contact, changes: Partial<ContactBase>) {
       card.set('fn', VCFHelpers.formatDisplayName(changes.name));
       contact.name = VCFHelpers.formatDisplayName(changes.name);
     } else if (key === 'title') {
-      card.add('title', changes.title);
+      if (changes.title) {
+        card.set('title', changes.title);
+      } else {
+        delete card.data['title'];
+      }
     } else if (key === 'company') {
       const org = VCFHelpers.asSingle(card.get('org')) as any;
       if (org) {
@@ -165,10 +184,20 @@ export function applyToVCF(contact: Contact, changes: Partial<ContactBase>) {
     } else if (key === 'phoneNumbers' || key === 'emailAddresses' || key === 'urls') {
       const attr = { phoneNumbers: 'tel', emailAddresses: 'email', urls: 'url' }[key];
       VCFHelpers.setArray(attr, card, changes[key]);
+      if (key === 'emailAddresses') {
+        contact.email = changes.emailAddresses[0]?.value || '';
+      }
     } else if (key === 'birthdays') {
       VCFHelpers.setArray('bday', card, changes.birthdays.map(VCFHelpers.serializeBirthday));
     } else if (key === 'addresses') {
       VCFHelpers.setArray('adr', card, changes[key].map(VCFHelpers.serializeAddress));
+    } else if (key === 'notes') {
+      if (changes.notes) {
+        // VCard NOTE: encode literal newlines as \n per the spec
+        card.set('note', changes.notes.replace(/\n/g, '\\n'));
+      } else {
+        delete card.data['note'];
+      }
     } else {
       console.log(`Unsure of how to apply changes to ${key}`);
     }
@@ -195,6 +224,9 @@ export function fromGoogle(info: ContactInfoGoogle): ContactParseResult {
       },
       title: ((info.organizations || [])[0] || {}).title || '',
       company: ((info.organizations || [])[0] || {}).name || '',
+      notes: ((info.biographies || [])[0] || {}).value || undefined,
+      // Google returns a generated monogram flagged `default` when there's no real photo.
+      photoURL: (info.photos || []).find((p) => !p.default)?.url,
       ...info,
     }),
   };
@@ -229,7 +261,7 @@ export function applyToGoogle(contact: Contact, changes: Partial<ContactBase>) {
       contact.name = VCFHelpers.formatDisplayName(changes.name);
     } else if (key === 'emailAddresses') {
       info[key] = val;
-      contact.email = val[0].value;
+      contact.email = val[0]?.value || '';
     } else if (key === 'title') {
       if (!info.organizations || info.organizations.length === 0) {
         info.organizations = [{ title: '', name: '', metadata }];
@@ -241,10 +273,16 @@ export function applyToGoogle(contact: Contact, changes: Partial<ContactBase>) {
       }
       info.organizations[0].name = val;
     } else if (key === 'addresses') {
-      info.addresses = val.map(address => ({
+      info.addresses = val.map((address) => ({
         ...address,
         formattedValue: VCFHelpers.formatAddress(address),
       }));
+    } else if (key === 'notes') {
+      if (!info.biographies || info.biographies.length === 0) {
+        info.biographies = [{ value: val, contentType: 'TEXT_PLAIN', metadata: { primary: true } }];
+      } else {
+        info.biographies[0].value = val;
+      }
     } else {
       info[key] = val;
     }
@@ -256,8 +294,8 @@ export function parse(contact: Contact): ContactParseResult {
     return !contact.info || Object.keys(contact.info).length === 0
       ? fromContact(contact)
       : 'vcf' in contact.info
-      ? fromVCF(contact.info)
-      : fromGoogle(contact.info);
+        ? fromVCF(contact.info)
+        : fromGoogle(contact.info);
   } catch (err) {
     console.warn(`Parsing of contact ${contact.email} failed: ${err.toString()}`);
     return fromContact(contact);

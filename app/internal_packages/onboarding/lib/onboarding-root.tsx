@@ -1,5 +1,5 @@
 import React from 'react';
-import { CSSTransitionGroup } from 'react-transition-group';
+import { CSSTransition, TransitionGroup } from 'react-transition-group';
 import { Account } from 'mailspring-exports';
 import OnboardingStore from './onboarding-store';
 import PageTopBar from './page-top-bar';
@@ -15,6 +15,7 @@ import AccountSettingsPageIMAP from './page-account-settings-imap';
 import AccountOnboardingSuccess from './page-account-onboarding-success';
 import InitialPreferencesPage from './page-initial-preferences';
 import InitialSubscriptionPage from './page-initial-subscription';
+import AccountSettingsPageOutlook from './page-account-settings-outlook';
 
 const PageComponents = {
   welcome: WelcomePage,
@@ -24,6 +25,7 @@ const PageComponents = {
   'account-settings': AccountSettingsPage,
   'account-settings-gmail': AccountSettingsPageGmail,
   'account-settings-o365': AccountSettingsPageO365,
+  'account-settings-outlook': AccountSettingsPageOutlook,
   'account-settings-imap': AccountSettingsPageIMAP,
   'account-onboarding-success': AccountOnboardingSuccess,
   'initial-preferences': InitialPreferencesPage,
@@ -34,6 +36,7 @@ interface OnboardingRootState {
   pageDepth: number;
   page: string;
   account: Account;
+  confirmServers: boolean;
 }
 
 export default class OnboardingRoot extends React.Component<
@@ -67,6 +70,7 @@ export default class OnboardingRoot extends React.Component<
       page: OnboardingStore.page(),
       pageDepth: OnboardingStore.pageDepth(),
       account: OnboardingStore.account(),
+      confirmServers: OnboardingStore.confirmServers(),
     };
   };
 
@@ -86,15 +90,13 @@ export default class OnboardingRoot extends React.Component<
           pageDepth={this.state.pageDepth}
           allowMoveBack={!['initial-preferences', 'account-choose'].includes(this.state.page)}
         />
-        <CSSTransitionGroup
-          transitionName="alpha-fade"
-          transitionLeaveTimeout={150}
-          transitionEnterTimeout={150}
-        >
-          <div key={this.state.page} className="page-container">
-            <Component account={this.state.account} />
-          </div>
-        </CSSTransitionGroup>
+        <TransitionGroup component={null}>
+          <CSSTransition key={this.state.page} classNames="alpha-fade" timeout={150}>
+            <div className="page-container">
+              <Component account={this.state.account} confirmServers={this.state.confirmServers} />
+            </div>
+          </CSSTransition>
+        </TransitionGroup>
       </div>
     );
   }

@@ -7,14 +7,12 @@ import MailspringWindow from './mailspring-window';
 const MAIN_WINDOW = 'default';
 const SPEC_WINDOW = 'spec';
 const ONBOARDING_WINDOW = 'onboarding';
-const CALENDAR_WINDOW = 'calendar';
 const CONTACTS_WINDOW = 'contacts';
 
 export default class WindowManager {
   static MAIN_WINDOW = MAIN_WINDOW;
   static SPEC_WINDOW = SPEC_WINDOW;
   static ONBOARDING_WINDOW = ONBOARDING_WINDOW;
-  static CALENDAR_WINDOW = CALENDAR_WINDOW;
   static CONTACTS_WINDOW = CONTACTS_WINDOW;
 
   initializeInBackground: boolean;
@@ -29,10 +27,18 @@ export default class WindowManager {
     configDirPath,
     initializeInBackground,
     config,
+  }: {
+    devMode: boolean;
+    safeMode: boolean;
+    specMode: boolean;
+    resourcePath: string;
+    configDirPath: string;
+    initializeInBackground: boolean;
+    config: import('../config').default;
   }) {
     this.initializeInBackground = initializeInBackground;
 
-    const onCreatedHotWindow = win => {
+    const onCreatedHotWindow = (win: MailspringWindow) => {
       this._registerWindow(win);
       this._didCreateNewWindow(win);
     };
@@ -47,20 +53,21 @@ export default class WindowManager {
     });
   }
 
-  get(windowKey) {
+  get(windowKey: string) {
     return this._windows[windowKey];
   }
 
   getOpenWindows() {
     const values = [];
-    Object.keys(this._windows).forEach(key => {
+    Object.keys(this._windows).forEach((key) => {
       const win = this._windows[key];
       if (win.windowType !== WindowLauncher.EMPTY_WINDOW) {
         values.push(win);
       }
     });
 
-    const score = win => (win.loadSettings().mainWindow ? 1000 : win.browserWindow.id);
+    const score = (win: MailspringWindow) =>
+      win.loadSettings().mainWindow ? 1000 : win.browserWindow.id;
 
     return values.sort((a, b) => score(b) - score(a));
   }
@@ -69,9 +76,9 @@ export default class WindowManager {
     return this.getOpenWindows().length;
   }
 
-  getVisibleWindows() {
-    const values = [];
-    Object.keys(this._windows).forEach(key => {
+  getVisibleWindows(): MailspringWindow[] {
+    const values: MailspringWindow[] = [];
+    Object.keys(this._windows).forEach((key) => {
       const win = this._windows[key];
       if (win.isVisible()) {
         values.push(win);
@@ -87,7 +94,7 @@ export default class WindowManager {
 
   getAllWindowDimensions() {
     const dims = {};
-    Object.keys(this._windows).forEach(key => {
+    Object.keys(this._windows).forEach((key) => {
       const win = this._windows[key];
       if (win.windowType !== WindowLauncher.EMPTY_WINDOW) {
         const { x, y, width, height } = win.browserWindow.getBounds();
@@ -115,7 +122,7 @@ export default class WindowManager {
     return win;
   }
 
-  _registerWindow = win => {
+  _registerWindow = (win: MailspringWindow) => {
     if (!win.windowKey) {
       throw new Error('WindowManager: You must provide a windowKey');
     }
@@ -129,7 +136,7 @@ export default class WindowManager {
     this._windows[win.windowKey] = win;
   };
 
-  _didCreateNewWindow = win => {
+  _didCreateNewWindow = (win: MailspringWindow) => {
     win.browserWindow.on('closed', () => {
       delete this._windows[win.windowKey];
       if (this.windowLauncher.hotWindow === win) {
@@ -144,7 +151,7 @@ export default class WindowManager {
     global.application.applicationMenu.addWindow(win.browserWindow);
   };
 
-  _registeredKeyForWindow = win => {
+  _registeredKeyForWindow = (win: MailspringWindow) => {
     for (const key of Object.keys(this._windows)) {
       const otherWin = this._windows[key];
       if (win === otherWin) {
@@ -154,15 +161,28 @@ export default class WindowManager {
     return null;
   };
 
-  ensureWindow(windowKey, extraOpts = {}) {
+  ensureWindow(
+    windowKey: string,
+    windowExtraOpts = {},
+    behavior?: { preserveHiddenOrMinimized: boolean }
+  ) {
     const win = this._windows[windowKey];
 
     if (!win) {
-      this.newWindow(this._coreWindowOpts(windowKey, extraOpts));
+      this.newWindow(this._coreWindowOpts(windowKey, windowExtraOpts));
+      // After creating the main window, clear the background flag so any
+      // future recreations (crash recovery, database reset) show normally.
+      if (windowKey === WindowManager.MAIN_WINDOW) {
+        this.initializeInBackground = false;
+      }
       return;
     }
 
     if (win.loadSettings().hidden) {
+      return;
+    }
+
+    if (behavior?.preserveHiddenOrMinimized) {
       return;
     }
 
@@ -221,7 +241,7 @@ export default class WindowManager {
   }
 
   quitCheck = _.debounce(() => {
-    const visibleWindows = _.filter(this._windows, win => win.isVisible());
+    const visibleWindows = _.filter(this._windows, (win) => win.isVisible());
     const mainWindow = this.get(WindowManager.MAIN_WINDOW);
     const noMainWindowLoaded = !mainWindow || !mainWindow.isLoaded();
     if (visibleWindows.length === 0 && noMainWindowLoaded) {
@@ -230,7 +250,7 @@ export default class WindowManager {
   }, 25000);
 
   focusedWindow() {
-    return _.find(this._windows, win => win.isFocused());
+    return _.find(this._windows, (win) => win.isFocused());
   }
 
   _coreWindowOpts(windowKey, extraOpts = {}) {
@@ -240,12 +260,15 @@ export default class WindowManager {
       windowType: WindowManager.MAIN_WINDOW,
       title: localized('Message Viewer'),
       toolbar: true,
+      // The toolbar's menu button is the only menu access on Windows; Linux follows
+      // core.workspace.menubarStyle via WindowLauncher.createDefaultWindowOpts.
       neverClose: true,
       bootstrapScript: require.resolve('../window-bootstrap'),
       mainWindow: true,
       width: 900, // Gets changed based on previous settings
       height: 600, // Gets changed based on previous settings
       initializeInBackground: this.initializeInBackground,
+      ...(process.platform === 'win32' ? { autoHideMenuBar: false } : {}),
     };
 
     coreWinOpts[WindowManager.ONBOARDING_WINDOW] = {
@@ -260,16 +283,6 @@ export default class WindowManager {
       height: 600,
     };
 
-    coreWinOpts[WindowManager.CALENDAR_WINDOW] = {
-      windowKey: WindowManager.CALENDAR_WINDOW,
-      windowType: WindowManager.CALENDAR_WINDOW,
-      title: localized('Calendar Preview'),
-      width: 900,
-      height: 600,
-      toolbar: false,
-      hidden: false,
-    };
-
     coreWinOpts[WindowManager.CONTACTS_WINDOW] = {
       windowKey: WindowManager.CONTACTS_WINDOW,
       windowType: WindowManager.CONTACTS_WINDOW,
@@ -278,6 +291,7 @@ export default class WindowManager {
       height: 500,
       toolbar: true,
       hidden: true,
+      ...(process.platform === 'win32' ? { autoHideMenuBar: false } : {}),
     };
 
     // The SPEC_WINDOW gets passed its own bootstrapScript

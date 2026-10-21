@@ -1,16 +1,50 @@
-
 import { execFile } from 'child_process';
 import path from 'path';
 import { File } from 'mailspring-exports';
+import { ipcRenderer } from 'electron';
+import { developerToolsAvailable } from '../developer-tools';
+
+// Generate token via IPC to ensure it's stored in the main process
+async function generatePreviewToken(previewPath: string): Promise<string> {
+  return ipcRenderer.invoke('quickpreview:generateToken', previewPath);
+}
+
+// Cleanup token via IPC
+function cleanupPreviewToken(token: string): void {
+  ipcRenderer.invoke('quickpreview:cleanupToken', token);
+}
+
+// Quickpreview windows use a dedicated in-memory session partition so the strict
+// CSP below can be applied via onHeadersReceived without replacing the listener
+// on the default session — Electron keeps only one onHeadersReceived listener per
+// session, and the default session's listener (main.js) injects the app-wide CSP.
+const QuickPreviewPartition = 'quickpreview';
+
+// Content Security Policy for quickpreview windows
+// Restricts script execution while allowing external images
+const QuickPreviewCSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'", // unsafe-inline needed for inline script in renderer.html
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https: http:", // Allow external images
+  "object-src 'none'",
+  "frame-src 'none'",
+  "base-uri 'self'",
+].join('; ');
 
 let quickPreviewWindow = null;
 let captureWindow = null;
+let captureWindowInUse = false;
 const captureQueue = [];
+
+const filesRoot = __dirname.replace('app.asar', 'app.asar.unpacked');
 
 const FileSizeLimit = 5 * 1024 * 1024;
 const ThumbnailWidth = 320 * (11 / 8.5);
+// Budget for generating a single thumbnail, shared by both strategies.
+const PreviewTimeout = 5000;
 const QuicklookIsAvailable = process.platform === 'darwin';
-const PDFJSRoot = path.join(__dirname, 'pdfjs-2.0.943');
+const PDFJSRoot = path.join(filesRoot, 'pdfjs-4.3.136');
 
 const QuicklookBlacklist = [
   'jpg',
@@ -31,21 +65,7 @@ const CrossplatformStrategies = {
   pdfjs: ['pdf'],
   mammoth: ['docx'],
   snarkdown: ['md'],
-  xlsx: [
-    'xls',
-    'xlsx',
-    'csv',
-    'eth',
-    'ods',
-    'fods',
-    'uos1',
-    'uos2',
-    'dbf',
-    'txt',
-    'prn',
-    'xlw',
-    'xlsb',
-  ],
+  xlsx: ['xls', 'xlsx', 'csv', 'eth', 'ods', 'fods', 'uos1', 'uos2', 'dbf', 'prn', 'xlw', 'xlsb'],
   prism: [
     'html',
     'svg',
@@ -73,6 +93,7 @@ const CrossplatformStrategies = {
     'rb',
     'rs',
     'sql',
+    'yml',
     'yaml',
     'txt',
     'log',
@@ -81,10 +102,10 @@ const CrossplatformStrategies = {
 
 const CrossplatformStrategiesBetterThanQuicklook = ['snarkdown', 'prism'];
 
-function strategyForPreviewing(ext) {
+function strategyForPreviewing(ext: string) {
   if (ext.startsWith('.')) ext = ext.substr(1);
 
-  const strategy = Object.keys(CrossplatformStrategies).find(strategy =>
+  const strategy = Object.keys(CrossplatformStrategies).find((strategy) =>
     CrossplatformStrategies[strategy].includes(ext)
   );
 
@@ -159,7 +180,7 @@ const PreviewWindowMenuTemplate: Electron.MenuItemConstructorOptions[] = [
         label: 'Reload',
         accelerator: 'CmdOrCtrl+R',
         click: function (item, focusedWindow) {
-          if (focusedWindow) focusedWindow.reload();
+          if (focusedWindow) (focusedWindow as Electron.BrowserWindow).reload();
         },
       },
       {
@@ -172,28 +193,33 @@ const PreviewWindowMenuTemplate: Electron.MenuItemConstructorOptions[] = [
           if (focusedWindow) focusedWindow.setFullScreen(!focusedWindow.isFullScreen());
         },
       },
-      {
-        label: 'Toggle Developer Tools',
-        accelerator: (function () {
-          if (process.platform === 'darwin') return 'Alt+Command+I';
-          else return 'Ctrl+Shift+I';
-        })(),
-        click: function (item, focusedWindow) {
-          if (focusedWindow) focusedWindow.webContents.toggleDevTools();
-        },
-      },
+      ...(developerToolsAvailable()
+        ? [
+            {
+              label: 'Toggle Developer Tools',
+              accelerator: (function () {
+                if (process.platform === 'darwin') return 'Alt+Command+I';
+                else return 'Ctrl+Shift+I';
+              })(),
+              click: function (item, focusedWindow) {
+                if (focusedWindow)
+                  (focusedWindow as Electron.BrowserWindow).webContents.toggleDevTools();
+              },
+            },
+          ]
+        : []),
     ],
   },
 ];
 
-export function canPossiblyPreviewExtension(file) {
+export function canPossiblyPreviewExtension(file: File) {
   if (file.size > FileSizeLimit) {
     return false;
   }
   return !!strategyForPreviewing(file.displayExtension());
 }
 
-export function displayQuickPreviewWindow(filePath) {
+export function displayQuickPreviewWindow(filePath: string) {
   const isPDF = filePath.endsWith('.pdf');
   const strategy = strategyForPreviewing(path.extname(filePath));
 
@@ -212,27 +238,53 @@ export function displayQuickPreviewWindow(filePath) {
       skipTaskbar: true,
       backgroundColor: isPDF ? '#404040' : '#FFF',
       webPreferences: {
-        preload: path.join(__dirname, 'preload.js'),
+        preload: path.join(filesRoot, 'preload.js'),
         nodeIntegration: false,
-        contextIsolation: false,
+        contextIsolation: true,
+        partition: QuickPreviewPartition,
+        devTools: developerToolsAvailable(),
       },
     });
+
+    // Apply Content Security Policy to the quickpreview partition only
+    quickPreviewWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [QuickPreviewCSP],
+        },
+      });
+    });
+
     quickPreviewWindow.once('closed', () => {
       quickPreviewWindow = null;
     });
-    quickPreviewWindow.setMenu(require('@electron/remote').Menu.buildFromTemplate(PreviewWindowMenuTemplate));
+    quickPreviewWindow.setMenu(
+      require('@electron/remote').Menu.buildFromTemplate(PreviewWindowMenuTemplate)
+    );
   } else {
     quickPreviewWindow.show();
   }
   quickPreviewWindow.setTitle(path.basename(filePath));
+
+  const onLoadError = (err: Error) => {
+    if (!err?.message?.includes('ERR_ABORTED')) {
+      console.error('Quickpreview display window failed to load:', err);
+    }
+  };
+
   if (isPDF) {
-    quickPreviewWindow.loadFile(path.join(PDFJSRoot, 'web/viewer.html'), {
-      search: `file=${encodeURIComponent(`file://${filePath}`)}`,
-    });
+    quickPreviewWindow
+      .loadFile(path.join(PDFJSRoot, 'web/viewer.html'), {
+        search: `file=${encodeURIComponent(`file://${filePath}`)}`,
+      })
+      .catch(onLoadError);
   } else {
-    quickPreviewWindow.loadFile(path.join(__dirname, 'renderer.html'), {
-      search: JSON.stringify({ mode: 'display', filePath, strategy }),
-    });
+    quickPreviewWindow
+      .loadFile(path.join(filesRoot, 'renderer.html'), {
+        search: JSON.stringify({ mode: 'display', filePath, strategy }),
+      })
+      .catch(onLoadError);
   }
 }
 
@@ -258,8 +310,18 @@ export async function generatePreview({
 
 // Private
 
-async function _generateCrossplatformPreview({ file, filePath, previewPath, strategy }) {
-  return new Promise(resolve => {
+async function _generateCrossplatformPreview({
+  file,
+  filePath,
+  previewPath,
+  strategy,
+}: {
+  file: File;
+  filePath: string;
+  previewPath: string;
+  strategy: string;
+}) {
+  return new Promise((resolve) => {
     captureQueue.push({ file, filePath, previewPath, strategy, resolve });
 
     if (!captureWindow || captureWindow.isDestroyed()) {
@@ -276,13 +338,26 @@ function _createCaptureWindow() {
     height: ThumbnailWidth,
     show: false,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(filesRoot, 'preload.js'),
       nodeIntegration: false,
-      contextIsolation: false,
+      contextIsolation: true,
+      partition: QuickPreviewPartition,
+      devTools: developerToolsAvailable(),
     },
   });
-  win.webContents.on('crashed', () => {
-    console.warn(`Thumbnail generation webcontents crashed.`);
+
+  // Apply Content Security Policy to the quickpreview partition only
+  win.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [QuickPreviewCSP],
+      },
+    });
+  });
+
+  win.webContents.on('render-process-gone', (event, details) => {
+    console.warn(`Thumbnail generation webcontents crashed (reason: ${details.reason}).`);
     if (captureWindow === win) captureWindow = null;
     win.destroy();
   });
@@ -292,23 +367,60 @@ function _createCaptureWindow() {
   return win;
 }
 
-function _generateNextCrossplatformPreview() {
+async function _generateNextCrossplatformPreview() {
   if (captureQueue.length === 0) {
-    if (captureWindow && !captureWindow.isDestroyed()) {
-      captureWindow.destroy();
-    } else {
-      console.warn(`Thumbnail generation finished but window is already destroyed.`);
+    // Don't tear down the window if a generation is already in progress — that
+    // invocation will schedule the next call to _generateNextCrossplatformPreview
+    // once it finishes, which will then reach this branch and clean up properly.
+    if (!captureWindowInUse) {
+      if (captureWindow && !captureWindow.isDestroyed()) {
+        captureWindow.destroy();
+      } else {
+        console.warn(`Thumbnail generation finished but window is already destroyed.`);
+      }
+      captureWindow = null;
     }
-    captureWindow = null;
     return;
   }
 
   const { strategy, filePath, previewPath, resolve } = captureQueue.pop();
 
+  // Mark the window as in-use before the async token generation so that a
+  // concurrent invocation reaching the queue-empty branch above does not
+  // destroy the window while we are suspended at the await below.
+  captureWindowInUse = true;
+
+  // Generate an opaque token for the preview path instead of passing the path directly
+  // Token is generated via IPC to ensure it's stored in the main process
+  let previewToken: string;
+  try {
+    previewToken = await generatePreviewToken(previewPath);
+  } catch (err) {
+    console.error('Quickpreview failed to generate token:', err);
+    captureWindowInUse = false;
+    process.nextTick(_generateNextCrossplatformPreview);
+    resolve(false);
+    return;
+  }
+
+  // The renderer process may have crashed while we were awaiting the token above.
+  // Recreate the window so generation can continue.
+  if (!captureWindow || captureWindow.isDestroyed()) {
+    captureWindow = _createCaptureWindow();
+  }
+
   // Start the thumbnail generation
-  captureWindow.loadFile(path.join(__dirname, 'renderer.html'), {
-    search: JSON.stringify({ strategy, mode: 'capture', filePath, previewPath }),
-  });
+  captureWindow
+    .loadFile(path.join(filesRoot, 'renderer.html'), {
+      search: JSON.stringify({ strategy, mode: 'capture', filePath, previewToken }),
+    })
+    .catch((err: Error) => {
+      // ERR_ABORTED is expected when a new preview starts while the previous is still loading
+      // (e.g. after the 5-second timeout fires). The thumbnail just won't be generated.
+      if (!err?.message?.includes('ERR_ABORTED')) {
+        console.error('Quickpreview capture window failed to load:', err);
+      }
+    });
 
   // Race against a timer to complete the preview. We don't want this to hang
   // forever if for some reason the window encounters an exception
@@ -317,16 +429,21 @@ function _generateNextCrossplatformPreview() {
   const timer = setTimeout(() => {
     console.warn(`Thumbnail generation timed out for ${filePath}`);
     onFinalize(false);
-  }, 5000);
+  }, PreviewTimeout);
 
   const onRendererSuccess = () => {
     onFinalize(true);
   };
 
-  onFinalize = success => {
+  onFinalize = (success) => {
+    captureWindowInUse = false;
     clearTimeout(timer);
     if (captureWindow) {
       captureWindow.removeListener('page-title-updated', onRendererSuccess);
+    }
+    // Clean up the token if preview failed (on success, IPC handler deletes it)
+    if (!success) {
+      cleanupPreviewToken(previewToken);
     }
     process.nextTick(_generateNextCrossplatformPreview);
     resolve(success);
@@ -336,25 +453,48 @@ function _generateNextCrossplatformPreview() {
 }
 
 async function _generateQuicklookPreview({ filePath }: { filePath: string }) {
-  const dirQuoted = path.dirname(filePath).replace(/"/g, '\\"')
-  const pathQuoted = filePath.replace(/"/g, '\\"')
+  const dirQuoted = path.dirname(filePath).replace(/"/g, '\\"');
+  const pathQuoted = filePath.replace(/"/g, '\\"');
 
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     const cmd = '/usr/bin/qlmanage';
-    const args = ['-t', "-f", `${window.devicePixelRatio}`, '-s', `${ThumbnailWidth}`, '-o', dirQuoted, pathQuoted]
+    const args = [
+      '-t',
+      '-f',
+      `${window.devicePixelRatio}`,
+      '-s',
+      `${ThumbnailWidth}`,
+      '-o',
+      dirQuoted,
+      pathQuoted,
+    ];
 
-    execFile(cmd, args, (error, stdout, stderr) => {
-      // Note: sometimes qlmanage outputs to stderr but still successfully
-      // produces a thumbnail. It complains about bad plugins pretty often.
-      if (
-        error ||
-        stdout.match(/No thumbnail created/i) ||
-        (stderr && !stdout.includes('produced one thumbnail'))
-      ) {
-        resolve(false);
-      } else {
-        resolve(true);
+    // qlmanage can hang indefinitely rather than failing -- an attachment saved
+    // without an extension is enough to do it, and Mailspring writes those out
+    // as "noname". Without a timeout the callback never fires and the child is
+    // never reaped, so each one leaks holding a pkd connection open; enough of
+    // them exhausts pkd's thread pool and every app that builds a Share menu
+    // then deadlocks on a synchronous XPC call to it.
+    // SIGKILL rather than the default SIGTERM: qlmanage handles SIGTERM and
+    // exits 0, so the timeout would look like a success and we would report a
+    // thumbnail that was never written.
+    execFile(
+      cmd,
+      args,
+      { timeout: PreviewTimeout, killSignal: 'SIGKILL' },
+      (error, stdout, stderr) => {
+        // Note: sometimes qlmanage outputs to stderr but still successfully
+        // produces a thumbnail. It complains about bad plugins pretty often.
+        if (
+          error ||
+          stdout.match(/No thumbnail created/i) ||
+          (stderr && !stdout.includes('produced one thumbnail'))
+        ) {
+          resolve(false);
+        } else {
+          resolve(true);
+        }
       }
-    });
+    );
   });
 }

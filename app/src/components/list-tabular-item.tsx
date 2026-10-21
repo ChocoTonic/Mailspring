@@ -1,6 +1,6 @@
 import SwipeContainer from './swipe-container';
 import React from 'react';
-import { PropTypes, Utils } from 'mailspring-exports';
+import { Utils } from 'mailspring-exports';
 import { ListTabularColumn } from './list-tabular';
 
 type ListTabularItemProps = {
@@ -12,6 +12,10 @@ type ListTabularItemProps = {
   item: any; // template type soon?
   itemProps?: {
     className?: string;
+    role?: string;
+    id?: string;
+    ariaSelected?: boolean;
+    ariaLabel?: string;
   };
   onSelect?: (...args: any[]) => any;
   onClick?: (...args: any[]) => any;
@@ -20,15 +24,6 @@ type ListTabularItemProps = {
 
 export class ListTabularItem extends React.Component<ListTabularItemProps> {
   static displayName = 'ListTabularItem';
-  static propTypes = {
-    metrics: PropTypes.object,
-    columns: PropTypes.arrayOf(PropTypes.object).isRequired,
-    item: PropTypes.object.isRequired,
-    itemProps: PropTypes.object,
-    onSelect: PropTypes.func,
-    onClick: PropTypes.func,
-    onDoubleClick: PropTypes.func,
-  };
 
   _columnCache: JSX.Element[] | null = null;
   _lastClickTime: number;
@@ -36,7 +31,7 @@ export class ListTabularItem extends React.Component<ListTabularItemProps> {
   // DO NOT DELETE unless you know what you're doing! This method cuts
   // React.Perf.wasted-time from ~300msec to 20msec by doing a deep
   // comparison of props before triggering a re-render.
-  shouldComponentUpdate(nextProps, nextState) {
+  shouldComponentUpdate(nextProps: ListTabularItemProps, nextState: Record<string, unknown>) {
     if (
       !Utils.isEqualReact(this.props.item, nextProps.item) ||
       this.props.columns !== nextProps.columns
@@ -55,7 +50,14 @@ export class ListTabularItem extends React.Component<ListTabularItemProps> {
   render() {
     const itemProps = this.props.itemProps || {};
     const className = `list-item list-tabular-item ${itemProps.className}`;
-    const props = Utils.fastOmit(itemProps, ['className']);
+    const { role, id, ariaSelected, ariaLabel } = itemProps;
+    const props = Utils.fastOmit(itemProps, [
+      'className',
+      'role',
+      'id',
+      'ariaSelected',
+      'ariaLabel',
+    ]);
 
     // It's expensive to compute the contents of columns (format timestamps, etc.)
     // We only do it if the item prop has changed.
@@ -66,6 +68,7 @@ export class ListTabularItem extends React.Component<ListTabularItemProps> {
     return (
       <SwipeContainer
         {...props}
+        role="presentation"
         onClick={this._onClick}
         style={{
           position: 'absolute',
@@ -74,7 +77,14 @@ export class ListTabularItem extends React.Component<ListTabularItemProps> {
           height: this.props.metrics.height,
         }}
       >
-        <div className={className} style={{ height: this.props.metrics.height }}>
+        <div
+          className={className}
+          style={{ height: this.props.metrics.height }}
+          role={role}
+          id={id}
+          aria-selected={ariaSelected}
+          aria-label={ariaLabel}
+        >
           {this._columnCache}
         </div>
       </SwipeContainer>
@@ -83,7 +93,7 @@ export class ListTabularItem extends React.Component<ListTabularItemProps> {
 
   _columns = () => {
     const names = {};
-    return (this.props.columns || []).map(column => {
+    return (this.props.columns || []).map((column) => {
       if (names[column.name]) {
         console.warn(
           `ListTabular: Columns do not have distinct names, will cause React error! \`${column.name}\` twice.`
@@ -103,7 +113,7 @@ export class ListTabularItem extends React.Component<ListTabularItemProps> {
     });
   };
 
-  _onClick = event => {
+  _onClick = (event: React.MouseEvent) => {
     if (typeof this.props.onSelect === 'function') {
       this.props.onSelect(this.props.item, event);
     }

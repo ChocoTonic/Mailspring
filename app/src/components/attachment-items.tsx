@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import classnames from 'classnames';
 import React, { Component, CSSProperties } from 'react';
-import PropTypes from 'prop-types';
 import ReactDOM from 'react-dom';
 import * as Actions from '../flux/actions';
 import { pickHTMLProps } from 'pick-react-known-prop';
@@ -10,25 +9,6 @@ import { RetinaImg } from './retina-img';
 import { Flexbox } from './flexbox';
 import { Spinner } from './spinner';
 import { localized } from '../intl';
-
-const propTypes = {
-  className: PropTypes.string,
-  draggable: PropTypes.bool,
-  focusable: PropTypes.bool,
-  filePath: PropTypes.string,
-  contentType: PropTypes.string,
-  download: PropTypes.shape({
-    state: PropTypes.string,
-    percent: PropTypes.number,
-  }),
-  displayName: PropTypes.string,
-  displaySize: PropTypes.string,
-  fileIconName: PropTypes.string,
-  filePreviewPath: PropTypes.string,
-  onOpenAttachment: PropTypes.func,
-  onRemoveAttachment: PropTypes.func,
-  onSaveAttachment: PropTypes.func,
-};
 
 const defaultProps = {
   draggable: true,
@@ -67,9 +47,7 @@ function buildContextMenu(fns: {
       label: localized('Save Into...'),
     });
   }
-  require('@electron/remote')
-    .Menu.buildFromTemplate(template)
-    .popup({});
+  require('@electron/remote').Menu.buildFromTemplate(template).popup({});
 }
 
 const ProgressBar: React.FunctionComponent<{
@@ -94,7 +72,14 @@ const ProgressBar: React.FunctionComponent<{
   );
 };
 
-function AttachmentActionIcon(props) {
+function AttachmentActionIcon(props: {
+  download?: { state: string; percent: number };
+  removeIcon?: string;
+  downloadIcon?: string;
+  retinaImgMode?: string;
+  onRemoveAttachment?: () => void;
+  onSaveAttachment?: () => void;
+}) {
   const {
     download,
     removeIcon,
@@ -108,7 +93,7 @@ function AttachmentActionIcon(props) {
   const isDownloading = download ? download.state === 'downloading' : false;
   const actionIconName = isRemovable || isDownloading ? removeIcon : downloadIcon;
 
-  const onClickActionIcon = event => {
+  const onClickActionIcon = (event: React.MouseEvent<HTMLDivElement>) => {
     event.stopPropagation(); // Prevent 'onOpenAttachment'
     if (isRemovable) {
       onRemoveAttachment();
@@ -123,12 +108,6 @@ function AttachmentActionIcon(props) {
     </div>
   );
 }
-AttachmentActionIcon.propTypes = {
-  removeIcon: PropTypes.string,
-  downloadIcon: PropTypes.string,
-  retinaImgMode: PropTypes.string,
-  ...propTypes,
-};
 
 interface AttachmentItemProps {
   className: string;
@@ -154,13 +133,11 @@ export class AttachmentItem extends Component<AttachmentItemProps> {
 
   static containerRequired = false;
 
-  static propTypes = propTypes;
-
   static defaultProps = defaultProps;
 
-  _fileIconComponent: RetinaImg;
+  _fileIconComponent: HTMLImageElement | null = null;
 
-  _onDragStart = event => {
+  _onDragStart = (event: React.DragEvent<HTMLDivElement>) => {
     const { contentType, filePath } = this.props;
     if (fs.existsSync(filePath)) {
       // Note: From trial and error, it appears that the second param /MUST/ be the
@@ -168,7 +145,8 @@ export class AttachmentItem extends Component<AttachmentItemProps> {
       const downloadURL = `${contentType}:${path.basename(filePath)}:file://${filePath}`;
       event.dataTransfer.setData('DownloadURL', downloadURL);
       event.dataTransfer.setData('text/mailspring-file-url', downloadURL);
-      const el = ReactDOM.findDOMNode(this._fileIconComponent) as HTMLElement;
+      const el = this._fileIconComponent;
+      if (!el) return;
       const rect = el.getBoundingClientRect();
       const x = window.devicePixelRatio === 2 ? rect.height / 2 : rect.height;
       const y = window.devicePixelRatio === 2 ? rect.width / 2 : rect.width;
@@ -178,7 +156,7 @@ export class AttachmentItem extends Component<AttachmentItemProps> {
     }
   };
 
-  _onAttachmentKeyDown = event => {
+  _onAttachmentKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === SPACE && this.props.filePreviewPath) {
       event.preventDefault();
       event.stopPropagation();
@@ -255,7 +233,7 @@ export class AttachmentItem extends Component<AttachmentItemProps> {
           <Flexbox direction="row" style={{ alignItems: 'center' }}>
             <div className="file-info-wrap">
               <RetinaImg
-                ref={cm => {
+                ref={(cm) => {
                   this._fileIconComponent = cm;
                 }}
                 className="file-icon"
@@ -293,12 +271,6 @@ interface ImageAttachmentItemProps extends AttachmentItemProps {
 
 export class ImageAttachmentItem extends Component<ImageAttachmentItemProps> {
   static displayName = 'ImageAttachmentItem';
-
-  static propTypes = {
-    imgProps: PropTypes.object,
-    onResized: PropTypes.func,
-    ...propTypes,
-  };
 
   static defaultProps = defaultProps;
 
@@ -353,14 +325,8 @@ export class ImageAttachmentItem extends Component<ImageAttachmentItemProps> {
   }
 
   render() {
-    const {
-      className,
-      displayName,
-      download,
-      onOpenAttachment,
-      onSaveAttachment,
-      ...extraProps
-    } = this.props;
+    const { className, displayName, download, onOpenAttachment, onSaveAttachment, ...extraProps } =
+      this.props;
 
     return (
       <div
@@ -400,7 +366,7 @@ export class ImageAttachmentItem extends Component<ImageAttachmentItemProps> {
     held: false,
     ratio: { wh: 0, hw: 0 },
   };
-  private _editor = () => document.querySelector('.compose-body') as HTMLDivElement;
+  private _editor = () => document.querySelector('.compose-body') as HTMLDivElement | null;
 
   private _resizeImage = (
     ev: (
@@ -436,12 +402,14 @@ export class ImageAttachmentItem extends Component<ImageAttachmentItemProps> {
       img.style.height = `${newHeight}px`;
     }
 
-    const firstChild = editor.children[0] as HTMLDivElement;
-    if (Number.parseInt(editor.style.flexBasis) < firstChild.offsetHeight) {
-      editor.style.flexBasis = `${firstChild.offsetHeight}px`;
-    }
+    if (editor) {
+      const firstChild = editor.children[0] as HTMLDivElement;
+      if (Number.parseInt(editor.style.flexBasis) < firstChild.offsetHeight) {
+        editor.style.flexBasis = `${firstChild.offsetHeight}px`;
+      }
 
-    this._pData = { x: ev.x, y: ev.y, eH: editor.clientHeight };
+      this._pData = { x: ev.x, y: ev.y, eH: editor.clientHeight };
+    }
   };
 
   private _resizeImageKeyPress = (ev: KeyboardEvent) => {
@@ -465,6 +433,10 @@ export class ImageAttachmentItem extends Component<ImageAttachmentItemProps> {
       imgEl = parent.querySelector('.file-preview img') as HTMLImageElement,
       editor = this._editor();
 
+    if (!editor) {
+      return;
+    }
+
     this._pData = { x: ev.pageX, y: ev.pageY, eH: editor.clientHeight };
     this._shiftData.held = ev.shiftKey;
     this._shiftData.ratio = { wh: imgEl.width / imgEl.height, hw: imgEl.height / imgEl.width };
@@ -487,8 +459,12 @@ export class ImageAttachmentItem extends Component<ImageAttachmentItemProps> {
   private _resizeEnd = (ev: MouseEvent) => {
     ev.preventDefault();
 
-    const editor = this._editor(),
-      target = editor.querySelector('.image-attachment-item[data-resizing]') as HTMLDivElement;
+    const editor = this._editor();
+    if (!editor) {
+      return;
+    }
+
+    const target = editor.querySelector('.image-attachment-item[data-resizing]') as HTMLDivElement;
 
     if (editor.clientHeight == this._pData.eH && target) {
       delete target.dataset.resizing;

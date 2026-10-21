@@ -5,6 +5,7 @@
  * Full docs: https://github.com/decaffeinate/decaffeinate/blob/master/docs/suggestions.md
  */
 import { BrowserWindow, Menu, app } from 'electron';
+import { developerToolsAvailable } from '../developer-tools';
 const Utils = require('../flux/models/utils');
 const { localized } = require('../intl');
 
@@ -19,10 +20,10 @@ export default class ApplicationMenu {
   activeTemplate: any;
   menu: Electron.Menu;
 
-  constructor(version) {
+  constructor(version: string) {
     this.version = version;
     this.setActiveTemplate(this.getDefaultTemplate());
-    global.application.autoUpdateManager.on('state-changed', state => {
+    global.application.autoUpdateManager.on('state-changed', (state: string) => {
       this.updateAutoupdateMenuItem(state);
     });
   }
@@ -33,7 +34,7 @@ export default class ApplicationMenu {
   // template - The Object which describes the menu to display.
   // keystrokesByCommand - An Object where the keys are commands and the values
   //                       are Arrays containing the keystroke.
-  update(window, template, keystrokesByCommand) {
+  update(window: BrowserWindow, template: any[], keystrokesByCommand: Record<string, string[]>) {
     this.translateTemplate(template, keystrokesByCommand);
     this.windowTemplates.set(window, template);
     if (window === this.lastFocusedWindow) {
@@ -64,7 +65,7 @@ export default class ApplicationMenu {
   }
 
   // Register a BrowserWindow with this application menu.
-  addWindow(window) {
+  addWindow(window: BrowserWindow) {
     if (!this.lastFocusedWindow) {
       this.lastFocusedWindow = window;
     }
@@ -100,7 +101,7 @@ export default class ApplicationMenu {
   // menu - A complete menu configuration object for electron's menu API.
   //
   // Returns an Array of native menu items.
-  flattenMenuItems(menu) {
+  flattenMenuItems(menu: Electron.Menu) {
     let items = [];
     for (const item of menu.items || []) {
       items.push(item);
@@ -116,7 +117,7 @@ export default class ApplicationMenu {
   // template - An object describing the menu item.
   //
   // Returns an Array of native menu items.
-  flattenMenuTemplate(template) {
+  flattenMenuTemplate(template: any[]) {
     let items = [];
     for (const item of template) {
       items.push(item);
@@ -131,7 +132,7 @@ export default class ApplicationMenu {
   //
   // enable - If true enables all window specific items, if false disables all
   //          window specific items.
-  enableWindowSpecificItems(enable) {
+  enableWindowSpecificItems(enable: boolean) {
     for (const item of this.flattenMenuItems(this.menu)) {
       if (item.metadata && item.metadata['windowSpecific']) {
         item.enabled = enable;
@@ -140,14 +141,14 @@ export default class ApplicationMenu {
   }
 
   // Replaces VERSION with the current version.
-  extendTemplateWithVersion(template) {
+  extendTemplateWithVersion(template: any[]) {
     const item = this.flattenMenuTemplate(template).find(({ label }) => label === 'VERSION');
     if (item) {
       item.label = `Version ${this.version}`;
     }
   }
 
-  extendTemplateWithWindowMenu(template) {
+  extendTemplateWithWindowMenu(template: any[]) {
     const windowMenu = template.find(({ label }) => label === localized('Window'));
     if (!windowMenu) {
       return;
@@ -156,8 +157,8 @@ export default class ApplicationMenu {
 
     const windows = global.application.windowManager.getOpenWindows();
     const windowsItems = windows
-      .filter(w => w.windowType !== 'default' && w.windowType !== 'contacts')
-      .map(w => ({
+      .filter((w) => w.windowType !== 'default' && w.windowType !== 'contacts')
+      .map((w) => ({
         label: w.loadSettings().title || 'Window',
         click() {
           w.show();
@@ -169,7 +170,7 @@ export default class ApplicationMenu {
   }
 
   // Sets the proper visible state the update menu items
-  updateAutoupdateMenuItem(state) {
+  updateAutoupdateMenuItem(state: string) {
     const checkForUpdateItem = this.flattenMenuItems(this.menu).find(
       ({ label }) => label === localized('Check for Updates')
     );
@@ -205,7 +206,7 @@ export default class ApplicationMenu {
     }
   }
 
-  updateFullscreenMenuItem(fullscreen) {
+  updateFullscreenMenuItem(fullscreen: boolean) {
     const enterItem = this.flattenMenuItems(this.menu).find(
       ({ label }) => label === localized('Enter Full Screen')
     );
@@ -249,13 +250,17 @@ export default class ApplicationMenu {
             click: () =>
               BrowserWindow.getFocusedWindow() && BrowserWindow.getFocusedWindow().close(),
           },
-          {
-            label: localized('Toggle Dev Tools'),
-            accelerator: 'CmdOrCtrl+Alt+I',
-            click: () =>
-              BrowserWindow.getFocusedWindow() &&
-              BrowserWindow.getFocusedWindow().webContents.toggleDevTools(),
-          },
+          ...(developerToolsAvailable()
+            ? [
+                {
+                  label: localized('Toggle Dev Tools'),
+                  accelerator: 'CmdOrCtrl+Alt+I',
+                  click: () =>
+                    BrowserWindow.getFocusedWindow() &&
+                    BrowserWindow.getFocusedWindow().webContents.toggleDevTools(),
+                },
+              ]
+            : []),
           {
             label: localized('Quit'),
             accelerator: 'CmdOrCtrl+Q',
@@ -277,8 +282,8 @@ export default class ApplicationMenu {
   //
   // Returns a complete menu configuration object for electron's menu API.
   //
-  translateTemplate(template, keystrokesByCommand) {
-    template.forEach(item => {
+  translateTemplate(template: any[], keystrokesByCommand: Record<string, string[]>) {
+    template.forEach((item) => {
       if (item.metadata == null) {
         item.metadata = {};
       }
@@ -306,8 +311,17 @@ export default class ApplicationMenu {
   //
   // Returns a String containing the keystroke in a format that can be interpreted
   //   by Electron to provide nice icons where available.
-  acceleratorForCommand(command, keystrokesByCommand) {
-    let firstKeystroke = keystrokesByCommand[command] && keystrokesByCommand[command][0];
+  acceleratorForCommand(command: string, keystrokesByCommand: Record<string, string[]>) {
+    // Outlook binds quit to ["command+q", "alt+f4"] so that Cmd+Q survives on macOS
+    // while ctrl+q is free for mark-as-read elsewhere. On Windows and Linux a
+    // `command` keystroke is the Super/Win key, so prefer a native keystroke for
+    // the menu and only fall back to it when nothing else is bound.
+    const keystrokes = keystrokesByCommand[command] || [];
+    const native =
+      process.platform === 'darwin'
+        ? keystrokes
+        : keystrokes.filter((keystroke) => !/\b(command|meta)\b/.test(keystroke));
+    let firstKeystroke = native[0] || keystrokes[0];
     if (!firstKeystroke) {
       return null;
     }
@@ -319,7 +333,7 @@ export default class ApplicationMenu {
     let modifiers = firstKeystroke.split('+');
     const key = modifiers.pop();
 
-    modifiers = modifiers.map(modifier =>
+    modifiers = modifiers.map((modifier) =>
       modifier
         .replace(/shift/gi, 'Shift')
         .replace(/command/gi, 'Command')

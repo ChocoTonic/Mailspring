@@ -1,11 +1,7 @@
 import React from 'react';
 import {
   localized,
-  Folder,
-  ChangeLabelsTask,
-  ChangeFolderTask,
   AccountStore,
-  CategoryStore,
   TaskFactory,
   MailboxPerspective,
   Actions,
@@ -81,32 +77,20 @@ class SearchMailboxPerspective extends MailboxPerspective {
     return false;
   }
 
-  tasksForRemovingItems(threads, source?: string) {
+  // Search results span every folder, so "remove" takes the account's usual archive or
+  // trash action without scoping it to a folder: the engine moves every copy outside Sent
+  // and Drafts. On Gmail the archive destination is the All Mail folder, where the message
+  // already is, so archiving has to go through TaskFactory's label removal instead.
+  tasksForRemovingItems(threads, source = 'Dragged out of list') {
     return TaskFactory.tasksForThreadsByAccountId(threads, (accountThreads, accountId) => {
-      const account = AccountStore.accountForId(accountId);
-      if (!account) {
-        return [];
-      }
-      const dest = account.preferredRemovalDestination();
+      const dest = AccountStore.accountForId(accountId)?.preferredRemovalDestination();
       if (!dest) {
         return [];
       }
-      if (dest instanceof Folder) {
-        return new ChangeFolderTask({
-          threads: accountThreads,
-          source: 'Dragged out of list',
-          folder: dest,
-        });
+      if (dest.role === 'trash') {
+        return TaskFactory.tasksForMovingToTrash({ threads: accountThreads, source });
       }
-      if (dest.role === 'all') {
-        // if you're searching and archive something, it really just removes the inbox label
-        return new ChangeLabelsTask({
-          threads: accountThreads,
-          source: 'Dragged out of list',
-          labelsToRemove: [CategoryStore.getInboxCategory(accountId)],
-        });
-      }
-      throw new Error('Unexpected destination returned from preferredRemovalDestination()');
+      return TaskFactory.tasksForArchiving({ threads: accountThreads, source });
     });
   }
 }

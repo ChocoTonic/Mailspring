@@ -11,7 +11,7 @@ import ReactDOM from 'react-dom';
 import ReactTestUtils from 'react-dom/test-utils';
 
 const MailspringTestUtils = {
-  loadKeymap: path => {
+  loadKeymap: (path) => {
     return AppEnv.keymaps.loadKeymap(path);
   },
 
@@ -39,7 +39,7 @@ const MailspringTestUtils = {
   removeFromDocument(reactElement) {
     const $el = ReactDOM.findDOMNode(reactElement) as HTMLElement;
     if (document.body.contains($el)) {
-      for (let child of Array.from(document.body.childNodes)) {
+      for (const child of Array.from(document.body.childNodes)) {
         if (child.contains($el)) {
           document.body.removeChild(child);
           return;
@@ -56,9 +56,9 @@ const MailspringTestUtils = {
     }
     let { dispose } = param;
     if (dispose == null) {
-      dispose = function() {};
+      dispose = function () {};
     }
-    let func = function(data) {};
+    let func = function (data) {};
     return {
       subscribe(fn) {
         func = fn;

@@ -1,7 +1,6 @@
 /* eslint global-require: 0*/
 import React from 'react';
-import PropTypes from 'prop-types';
-import rimraf from 'rimraf';
+import fs from 'fs';
 import { localized } from 'mailspring-exports';
 import ConfigSchemaItem from './config-schema-item';
 import WorkspaceSection from './workspace-section';
@@ -9,27 +8,22 @@ import SendingSection from './sending-section';
 import LanguageSection from './language-section';
 import { ConfigLike, ConfigSchemaLike } from '../types';
 
-
 class PreferencesGeneral extends React.Component<{
   config: ConfigLike;
   configSchema: ConfigSchemaLike;
 }> {
   static displayName = 'PreferencesGeneral';
 
-  static propTypes = {
-    config: PropTypes.object,
-    configSchema: PropTypes.object,
-  };
-
   _onReboot = () => {
+    console.log('general relaunch');
     const app = require('@electron/remote').app;
     app.relaunch();
     app.quit();
   };
 
   _onResetEmailsThatIgnoreWarnings = () => {
-    localStorage.removeItem("recipientWarningBlacklist");
-  }
+    localStorage.removeItem('recipientWarningBlacklist');
+  };
 
   _onResetAccountsAndSettings = () => {
     const chosen = require('@electron/remote').dialog.showMessageBoxSync({
@@ -39,7 +33,7 @@ class PreferencesGeneral extends React.Component<{
     });
 
     if (chosen === 1) {
-      rimraf(AppEnv.getConfigDirPath(), { disableGlob: true }, err => {
+      fs.rm(AppEnv.getConfigDirPath(), { recursive: true, force: true }, (err) => {
         if (err) {
           return AppEnv.showErrorDialog(
             localized(
@@ -58,7 +52,6 @@ class PreferencesGeneral extends React.Component<{
     const ipc = require('electron').ipcRenderer;
     ipc.send('command', 'application:reset-database', {});
   };
-
 
   render() {
     return (
@@ -81,7 +74,11 @@ class PreferencesGeneral extends React.Component<{
         <div className="two-columns-flexbox" style={{ paddingTop: 30 }}>
           <div style={{ flex: 1 }}>
             <SendingSection config={this.props.config} configSchema={this.props.configSchema} />
-            <div className="btn" onClick={this._onResetEmailsThatIgnoreWarnings} style={{ marginLeft: 0, marginTop:5 }}>
+            <div
+              className="btn"
+              onClick={this._onResetEmailsThatIgnoreWarnings}
+              style={{ marginLeft: 0, marginTop: 5 }}
+            >
               {localized('Reset Emails that Ignore Warnings')}
             </div>
           </div>
@@ -104,11 +101,6 @@ class PreferencesGeneral extends React.Component<{
               keyPath="core.notifications"
               config={this.props.config}
             />
-            <div className="platform-note platform-linux-only">
-              {localized(
-                'Mailspring desktop notifications on Linux require Zenity. You may need to install it with your package manager.'
-              )}
-            </div>
           </div>
           <div style={{ width: 30 }} />
           <div style={{ flex: 1 }}>

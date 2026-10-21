@@ -2,8 +2,8 @@ import { EventedIFrame } from 'mailspring-component-kit';
 import React from 'react';
 import ReactDOM from 'react-dom';
 import {
-  PropTypes,
   Utils,
+  localized,
   QuotedHTMLTransformer,
   MessageStore,
   Message,
@@ -11,6 +11,7 @@ import {
 } from 'mailspring-exports';
 import { adjustImages } from './adjust-images';
 import EmailFrameStylesStore from './email-frame-styles-store';
+import { backgroundColorBehind, prepareEmailColors } from './email-color-detection';
 
 interface EmailFrameProps {
   content: string;
@@ -21,12 +22,6 @@ interface EmailFrameProps {
 export default class EmailFrame extends React.Component<EmailFrameProps> {
   static displayName = 'EmailFrame';
 
-  static propTypes = {
-    content: PropTypes.string.isRequired,
-    message: PropTypes.object,
-    showQuotedText: PropTypes.bool,
-  };
-
   _mounted = false;
   _unlisten: () => void;
   _iframeComponent: EventedIFrame;
@@ -36,7 +31,7 @@ export default class EmailFrame extends React.Component<EmailFrameProps> {
 
   componentDidMount() {
     this._mounted = true;
-    this._iframeDocObserver = new window.ResizeObserver(entries =>
+    this._iframeDocObserver = new window.ResizeObserver((entries) =>
       window.requestAnimationFrame(() => {
         if (!this._mounted) return;
         this._onReevaluateContentSize(entries[0]);
@@ -84,7 +79,7 @@ export default class EmailFrame extends React.Component<EmailFrameProps> {
     // the `border-collapse: collapse` css property while setting a
     // `padding`.
     const { message, showQuotedText } = this.props;
-    const styles = EmailFrameStylesStore.styles();
+    const { themeStyles, renderModeStyles } = EmailFrameStylesStore.styles();
     const restrictWidth = AppEnv.config.get('core.reading.restrictMaxWidth');
 
     let content = this.props.content;
@@ -99,18 +94,33 @@ export default class EmailFrame extends React.Component<EmailFrameProps> {
     if (message.plaintext) {
       doc.write(
         `<!DOCTYPE html>` +
-          (styles ? `<style>${styles}</style>` : '') +
+          `<style>${themeStyles}</style>` +
           `<div id='inbox-plain-wrapper' class="${process.platform}"></div>`
       );
       doc.close();
-      doc.getElementById('inbox-plain-wrapper').innerText = content;
+      const plainWrapper = doc.getElementById('inbox-plain-wrapper');
+      plainWrapper.innerText = content;
+      plainWrapper.setAttribute('role', 'document');
     } else {
       doc.write(
         `<!DOCTYPE html>` +
-          (styles ? `<style>${styles}</style>` : '') +
+          `<style>${themeStyles || ''}</style>` +
+          `<style data-email-render-mode>${renderModeStyles || ''}</style>` +
           `<div id='inbox-html-wrapper' class="${process.platform}">${content}</div>`
       );
       doc.close();
+      const htmlWrapper = doc.getElementById('inbox-html-wrapper');
+      if (htmlWrapper) {
+        htmlWrapper.setAttribute('role', 'document');
+        try {
+          // Note: In some cases, prepareEmailColors modifies the doc, replacing
+          // hardcoded black text with inherited colors for better theme support.
+          const hasBackground = prepareEmailColors(htmlWrapper, backgroundColorBehind(iframeEl));
+          htmlWrapper.classList.toggle('has-background', hasBackground);
+        } catch (e) {
+          AppEnv.reportError(e);
+        }
+      }
     }
 
     if (doc.body && restrictWidth) {
@@ -132,6 +142,10 @@ export default class EmailFrame extends React.Component<EmailFrameProps> {
     });
 
     window.requestAnimationFrame(() => {
+      // Guard: component may have unmounted or _writeContent called again (calling
+      // doc.open() a second time), leaving doc.body null until the next doc.write().
+      if (!this._mounted || !doc.body) return;
+
       Autolink(doc.body, {
         async: true,
         telAggressiveMatch: false,
@@ -149,7 +163,8 @@ export default class EmailFrame extends React.Component<EmailFrameProps> {
             iframe: iframeEl,
           });
         } catch (e) {
-          AppEnv.reportError(e);
+          const name = (extension as any).displayName || (extension as any).name || 'unknown';
+          AppEnv.reportError(e, { extensionName: name });
         }
       }
     });
@@ -198,7 +213,7 @@ export default class EmailFrame extends React.Component<EmailFrameProps> {
       <div
         className="message-iframe-container"
         style={{ height: 0 }}
-        ref={el => {
+        ref={(el) => {
           this._iframeWrapperEl = el;
         }}
       >
@@ -206,8 +221,9 @@ export default class EmailFrame extends React.Component<EmailFrameProps> {
           searchable
           sandbox="allow-forms allow-same-origin"
           seamless={true}
+          title={localized('Email message')}
           style={{ height: 0 }}
-          ref={cm => {
+          ref={(cm) => {
             this._iframeComponent = cm;
           }}
         />

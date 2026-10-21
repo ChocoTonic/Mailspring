@@ -75,7 +75,7 @@ const scopes: {
   main: [],
 };
 
-const create = (name, scope: 'window' | 'global' | 'main') => {
+const create = (name: string, scope: 'window' | 'global' | 'main') => {
   const obj = Reflux.createAction(name) as Action;
   obj.scope = scope;
   obj.sync = true;
@@ -188,7 +188,10 @@ export const reorderAccount = create('reorderAccount', ActionScopeWindow);
   Actions.updateContainerFolderDefault(newContainerFolderDefault)
   ```
   */
-export const updateContainerFolderDefault = create('updateContainerFolderDefault', ActionScopeWindow);
+export const updateContainerFolderDefault = create(
+  'updateContainerFolderDefault',
+  ActionScopeWindow
+);
 
 /*
   Public: Select the provided sheet in the current window. This action changes
@@ -379,13 +382,20 @@ export const composeReply = create('composeReply', ActionScopeWindow);
 export const composeForward = create('composeForward', ActionScopeWindow);
 
 /*
+  Public: Create an editable copy of a sent message and open it in a new composer
+  window. Recipients, subject, body, sender identity, and attachments are preserved.
+
+  *Scope: Window*
+  */
+export const composeSendAgain = create('composeSendAgain', ActionScopeWindow);
+
+/*
   Public: Compose and send a new draft for forwarding the provided threadId and messageId. See
   {::composeReply} for parameters and behavior.
 
   *Scope: Window*
   */
 export const composeAndSendForward = create('composeAndSendForward', ActionScopeWindow);
-
 
 /*
   Public: Pop out the draft with the provided ID so the user can edit it in another
@@ -544,6 +554,9 @@ export const expandSyncState = create('expandSyncState', ActionScopeWindow);
 export const searchQuerySubmitted = create('searchQuerySubmitted', ActionScopeWindow);
 export const searchQueryChanged = create('searchQueryChanged', ActionScopeWindow);
 export const searchCompleted = create('searchCompleted', ActionScopeWindow);
+
+// Calendar
+export const focusCalendarEvent = create('focusCalendarEvent', ActionScopeWindow);
 
 // Templates
 export const insertTemplateId = create('insertTemplateId', ActionScopeWindow);

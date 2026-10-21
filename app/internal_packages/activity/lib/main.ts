@@ -10,7 +10,7 @@ import { HasTutorialTip } from 'mailspring-component-kit';
 import ActivityMailboxPerspective from './activity-mailbox-perspective';
 import ActivityEventStore from './activity-event-store';
 import ActivityListButton from './list/activity-list-button';
-import Root from './dashboard/root';
+import Root from './root';
 
 const ActivityListButtonWithTutorialTip = HasTutorialTip(ActivityListButton, {
   title: localized('Open and link tracking'),
@@ -54,9 +54,12 @@ export function activate() {
     Actions.selectRootSheet(WorkspaceStore.Sheet.Activity);
   }
 
-  // list view in top left
+  // list view in the mail and calendar toolbars, beside compose / new event
   ComponentRegistry.register(ActivityListButtonWithTutorialTip, {
-    location: WorkspaceStore.Location.RootSidebar.Toolbar,
+    locations: [
+      WorkspaceStore.Location.RootSidebar.Toolbar,
+      WorkspaceStore.defineLocation('CalendarSidebar').Toolbar,
+    ],
   });
   ActivityEventStore.activate();
 }

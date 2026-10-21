@@ -28,11 +28,27 @@ class MatchQueryExpressionVisitor extends SearchQueryExpressionVisitor {
     }
   }
 
+  // The parser builds right-nested binary trees, and FTS5's parser overflows its stack on
+  // deeply nested parentheses (about 40 levels), so chains of the same operator are emitted
+  // flat: `(a OR b OR c)` rather than `(a OR (b OR c))`.
+  _operands(node, type) {
+    const out = [];
+    const stack = [node];
+    while (stack.length) {
+      const n = stack.pop();
+      if (n instanceof type) {
+        stack.push(n.e2, n.e1);
+      } else {
+        out.push(n);
+      }
+    }
+    return out;
+  }
+
   visitAnd(node) {
     this._assertIsMatchCompatible(node);
-    const lhs = this.visitAndGetResult(node.e1);
-    const rhs = this.visitAndGetResult(node.e2);
-    this._result = `(${lhs} AND ${rhs})`;
+    const parts = this._operands(node, AndQueryExpression).map((n) => this.visitAndGetResult(n));
+    this._result = `(${parts.join(' AND ')})`;
   }
 
   visitNot(node) {
@@ -43,9 +59,8 @@ class MatchQueryExpressionVisitor extends SearchQueryExpressionVisitor {
   }
 
   visitOr(node) {
-    const lhs = this.visitAndGetResult(node.e1);
-    const rhs = this.visitAndGetResult(node.e2);
-    this._result = `(${lhs} OR ${rhs})`;
+    const parts = this._operands(node, OrQueryExpression).map((n) => this.visitAndGetResult(n));
+    this._result = `(${parts.join(' OR ')})`;
   }
 
   visitDate(node) {}
@@ -71,8 +86,12 @@ class MatchQueryExpressionVisitor extends SearchQueryExpressionVisitor {
   }
 
   visitText(node) {
-    // TODO: Should we do anything about possible SQL injection attacks?
-    this._result = node.token.s;
+    // Escape double quotes for FTS5 quoted string context. The callers
+    // (visitFrom, visitTo, visitSubject, visitGeneric, visitIn) all wrap
+    // this text in double quotes, so the only character that needs escaping
+    // is the double quote itself (doubled per FTS5 spec). All other special
+    // FTS5 characters are neutralized by being inside the quoted phrase.
+    this._result = node.token.s.replace(/"/g, '""');
   }
 
   visitUnread(node) {
@@ -85,7 +104,7 @@ class MatchQueryExpressionVisitor extends SearchQueryExpressionVisitor {
 
   visitIn(node) {
     const text = this.visitAndGetResult(node.text);
-    this._result = `(categories : "${text}*")`;
+    this._result = `(categories : "${text}"*)`;
   }
 
   visitHasAttachment(node) {
@@ -245,11 +264,8 @@ class StructuredSearchQueryVisitor extends SearchQueryExpressionVisitor {
   }
 
   visitHasAttachment(/* node */) {
-    /*
-    TODO BG: On Dec. 18th 2018 I fixed the sync engine to populate the `hasAttachment` column
-    with a valid attachment count. After DB CURRENT_VERSION > 4, we should switch to using
-    that field rather than this slow LIKE clause.
-    */
+    // Note: The sync engine populates attachmentCount in the data blob, but the
+    // column is not queryable in the schema. This LIKE clause is a workaround.
     this._result = `(\`${this._className}\`.\`data\` NOT LIKE '%"attachmentCount":0%')`;
   }
 

@@ -3,6 +3,7 @@ import React from 'react';
 import { localized, Account } from 'mailspring-exports';
 import CreatePageForForm from './decorators/create-page-for-form';
 import FormField from './form-field';
+import { serversOutsideDomain } from './onboarding-helpers';
 
 const StandardIMAPPorts = [143, 993];
 const StandardSMTPPorts = [25, 465, 587];
@@ -34,7 +35,37 @@ class AccountIMAPSettingsForm extends React.Component<AccountIMAPSettingsFormPro
     return localized('Complete the IMAP and SMTP settings below to connect your account.');
   };
 
-  static validateAccount = account => {
+  // confirmServers means the servers came from unsigned DNS SRV records, so the user confirms
+  // each host outside their domain by name before the password goes to it (RFC 6186 §6).
+  static warningLabel = ({
+    account,
+    confirmServers,
+  }: {
+    account: Account;
+    confirmServers?: boolean;
+  }) => {
+    if (!confirmServers) return null;
+    const domain = account.emailAddress.split('@').pop();
+    const hosts = serversOutsideDomain(account);
+    if (hosts.length === 1) {
+      return localized(
+        `The server %@ is not part of %@. It came from that domain's DNS records, which can be forged, so connect only if your email provider runs it.`,
+        hosts[0],
+        domain
+      );
+    }
+    if (hosts.length === 2) {
+      return localized(
+        `The servers %@ and %@ are not part of %@. They came from that domain's DNS records, which can be forged, so connect only if your email provider runs them.`,
+        hosts[0],
+        hosts[1],
+        domain
+      );
+    }
+    return null;
+  };
+
+  static validateAccount = (account: Account) => {
     let errorMessage = null;
     const errorFieldNames = [];
 
@@ -58,8 +89,8 @@ class AccountIMAPSettingsForm extends React.Component<AccountIMAPSettingsFormPro
     return { errorMessage, errorFieldNames, populated: true };
   };
 
-  componentDidMount () {
-    ipcRenderer.send('resize-window', {width: 900, height: 660});
+  componentDidMount() {
+    ipcRenderer.send('resize-window', { width: 900, height: 660 });
   }
 
   renderPortDropdown(protocol) {
@@ -81,8 +112,8 @@ class AccountIMAPSettingsForm extends React.Component<AccountIMAPSettingsFormPro
     // When you change the port, automatically switch the security setting to
     // the standard for that port. Lots of people don't update that field and
     // are getting confused.
-    const onPortChange = event => {
-      const port = event.target.value / 1;
+    const onPortChange = (event: { target: { value: string; id: string } }) => {
+      const port = Number(event.target.value);
 
       onFieldChange(
         { target: { value: port, id: event.target.id } },
@@ -118,7 +149,7 @@ class AccountIMAPSettingsForm extends React.Component<AccountIMAPSettingsFormPro
           disabled={submitting}
           onChange={onPortChange}
         >
-          {values.map(v => (
+          {values.map((v) => (
             <option value={v} key={v}>
               {v}
             </option>
@@ -128,19 +159,28 @@ class AccountIMAPSettingsForm extends React.Component<AccountIMAPSettingsFormPro
           </option>
         </select>
         {!isStandard && (
-          <input
-            style={{
-              width: 80,
-              marginLeft: 6,
-              height: 23,
-            }}
-            id={`settings.${field}`}
-            tabIndex={0}
-            value={settings[field]}
-            disabled={submitting}
-            onKeyPress={onFieldKeyPress}
-            onChange={onFieldChange}
-          />
+          <>
+            <label htmlFor={`settings.${field}_custom`} className="sr-only">
+              {localized('Custom Port')}
+            </label>
+            <input
+              style={{
+                width: 80,
+                marginLeft: 6,
+                height: 23,
+              }}
+              id={`settings.${field}_custom`}
+              tabIndex={0}
+              value={settings[field]}
+              disabled={submitting}
+              onKeyPress={onFieldKeyPress}
+              onChange={(e) =>
+                onPortChange({
+                  target: { value: e.target.value, id: `settings.${field}` },
+                })
+              }
+            />
+          </>
         )}
       </span>
     );
@@ -197,12 +237,16 @@ class AccountIMAPSettingsForm extends React.Component<AccountIMAPSettingsFormPro
   renderFieldsForType(type) {
     return (
       <div>
-        <FormField field={`settings.${type}_host`} title={'Server'} {...this.props} />
+        <FormField field={`settings.${type}_host`} title={localized('Server')} {...this.props} />
         <div style={{ textAlign: 'left' }}>
           {this.renderPortDropdown(type)}
           {this.renderSecurityDropdown(type)}
         </div>
-        <FormField field={`settings.${type}_username`} title={'Username'} {...this.props} />
+        <FormField
+          field={`settings.${type}_username`}
+          title={localized('Username')}
+          {...this.props}
+        />
         <FormField
           field={`settings.${type}_password`}
           title={localized('Password')}
@@ -210,7 +254,11 @@ class AccountIMAPSettingsForm extends React.Component<AccountIMAPSettingsFormPro
           {...this.props}
         />
         {type === 'imap' && (
-          <FormField field={`settings.container_folder`} title={'Custom Container Folder'} {...this.props} />
+          <FormField
+            field={`settings.container_folder`}
+            title={localized('Custom Container Folder')}
+            {...this.props}
+          />
         )}
       </div>
     );

@@ -1,7 +1,6 @@
 import _ from 'underscore';
 import React, { Component, CSSProperties } from 'react';
 import { findDOMNode } from 'react-dom';
-import PropTypes from 'prop-types';
 
 import * as Actions from '../flux/actions';
 import compose from './decorators/compose';
@@ -54,22 +53,6 @@ type FixedPopoverState = {
 class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
   static Directions = Direction;
 
-  static propTypes = {
-    children: PropTypes.element,
-    direction: PropTypes.string,
-    fallbackDirection: PropTypes.string,
-    closeOnAppBlur: PropTypes.bool,
-    originRect: PropTypes.shape({
-      bottom: PropTypes.number,
-      top: PropTypes.number,
-      right: PropTypes.number,
-      left: PropTypes.number,
-      height: PropTypes.number,
-      width: PropTypes.number,
-    }),
-    focusElementWithTabIndex: PropTypes.func,
-  };
-
   static defaultProps = {
     closeOnAppBlur: true,
   };
@@ -77,8 +60,10 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
   mounted = false;
   updateCount = 0;
   fallback: Direction;
+  placing = true;
+  resizeObserver: ResizeObserver;
 
-  constructor(props) {
+  constructor(props: FixedPopoverProps) {
     super(props);
     this.fallback = this.props.fallbackDirection;
     this.state = {
@@ -92,20 +77,23 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
     this.mounted = true;
     findDOMNode(this.refs.popoverContainer).addEventListener('animationend', this.onAnimationEnd);
     window.addEventListener('resize', this.onWindowResize);
+    this.resizeObserver = new ResizeObserver(this.onPopoverResized);
+    this.resizeObserver.observe(findDOMNode(this.refs.popover) as Element);
     _.defer(this.onPopoverRendered);
   }
 
-  componentWillReceiveProps(nextProps) {
-    this.fallback = nextProps.fallbackDirection;
-    this.setState({ direction: nextProps.direction });
+  componentDidUpdate(prevProps: FixedPopoverProps, prevState: FixedPopoverState) {
+    if (prevProps.fallbackDirection !== this.props.fallbackDirection) {
+      this.fallback = this.props.fallbackDirection;
+    }
+    if (prevProps.direction !== this.props.direction) {
+      this.setState({ direction: this.props.direction });
+    }
+    _.defer(this.onPopoverRendered);
   }
 
-  shouldComponentUpdate(nextProps, nextState) {
+  shouldComponentUpdate(nextProps: FixedPopoverProps, nextState: FixedPopoverState) {
     return !_.isEqual(this.state, nextState) || !_.isEqual(this.props, nextProps);
-  }
-
-  componentDidUpdate() {
-    _.defer(this.onPopoverRendered);
   }
 
   componentWillUnmount() {
@@ -115,6 +103,7 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
       this.onAnimationEnd
     );
     window.removeEventListener('resize', this.onWindowResize);
+    this.resizeObserver.disconnect();
   }
 
   onAnimationEnd = () => {
@@ -124,6 +113,19 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
   onWindowResize() {
     Actions.closePopover();
   }
+
+  // The content can change size once the popover is placed: the event card becomes the editor
+  // in place, and the taller box, still centred on its anchor, runs past the window. Placement
+  // starts over from the requested direction, as opening at the new size would.
+  onPopoverResized = () => {
+    if (!this.mounted || this.placing) {
+      return;
+    }
+    this.placing = true;
+    this.updateCount = 0;
+    this.fallback = this.props.fallbackDirection;
+    this.setState({ direction: this.props.direction, offset: {} }, this.onPopoverRendered);
+  };
 
   onPopoverRendered = () => {
     if (!this.mounted) {
@@ -140,7 +142,19 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
     });
     if (newState) {
       if (this.updateCount > 1) {
-        this.setState({ direction: this.props.direction, offset: {}, visible: true });
+        // No direction fits, so bring the popover inside the window rather than leave it
+        // where it overflows. The direction that produced currentRect is kept, because the
+        // correction is measured against it - so a popover given a fallbackDirection settles
+        // in the direction that was tried last rather than the one originally asked for.
+        this.placing = false;
+        this.setState({
+          offset: this.computeClampedOffset({
+            currentRect,
+            windowDimensions,
+            offset: this.state.offset,
+          }),
+          visible: true,
+        });
         return;
       }
 
@@ -149,21 +163,22 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
       this.updateCount++;
       this.setState(newState);
     } else {
+      this.placing = false;
       this.setState({ visible: true });
     }
   };
 
-  onBlur = event => {
+  onBlur = (event: React.FocusEvent<HTMLDivElement>) => {
     const target = event.nativeEvent.relatedTarget;
     if (!this.props.closeOnAppBlur && target === null) {
       return;
     }
-    if (!target || !findDOMNode(this).contains(target)) {
+    if (!target || !findDOMNode(this).contains(target as Node)) {
       Actions.closePopover();
     }
   };
 
-  onKeyDown = event => {
+  onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
       Actions.closePopover();
     }
@@ -196,6 +211,45 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
     return { overflows, overflowValues };
   };
 
+  /*
+  The extra translate that brings an off-screen popover back inside the window.
+
+  Reached when flipping the direction and nudging across it have both failed, which happens
+  when the popover is simply taller or wider than the room beside its anchor - a full event
+  editor next to an event low in a short window, say. The popover is moved off its anchor to
+  stay reachable, so the pointer no longer touches it; an unreachable footer is the worse of
+  the two.
+
+  `offset` must be the one currentRect already reflects, since the correction is added to it
+  rather than replacing it. Pulling an edge in can push the opposite edge out when the
+  popover is larger than the window itself; there the top/left edge wins, so the popover
+  starts inside the window and its own max-height scrolls the rest.
+  */
+  computeClampedOffset = ({
+    currentRect,
+    windowDimensions,
+    offset = {} as FixedPopoverState['offset'],
+    offsetPadding = OFFSET_PADDING,
+  }) => {
+    let dx = 0;
+    let dy = 0;
+
+    if (currentRect.right > windowDimensions.width) {
+      dx = windowDimensions.width - currentRect.right - offsetPadding;
+    }
+    if (currentRect.left + dx < 0) {
+      dx = offsetPadding - currentRect.left;
+    }
+    if (currentRect.bottom > windowDimensions.height) {
+      dy = windowDimensions.height - currentRect.bottom - offsetPadding;
+    }
+    if (currentRect.top + dy < 0) {
+      dy = offsetPadding - currentRect.top;
+    }
+
+    return { x: (offset.x || 0) + dx, y: (offset.y || 0) + dy };
+  };
+
   computeAdjustedOffsetAndDirection = ({
     direction,
     currentRect,
@@ -204,7 +258,7 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
     offsetPadding = OFFSET_PADDING,
   }) => {
     const { overflows, overflowValues } = this.computeOverflows({ currentRect, windowDimensions });
-    const overflowCount = Object.keys(_.pick(overflows, val => val === true)).length;
+    const overflowCount = Object.keys(_.pick(overflows, (val) => val === true)).length;
 
     if (overflowCount > 0) {
       if (fallback) {
@@ -258,7 +312,7 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
         };
         popoverStyle = {
           // Center, place on top of container, and adjust 10px for the pointer
-          transform: `translate(${offset.x || 0}px) translate(-50%, calc(-100% - 10px))`,
+          transform: `translate(${offset.x || 0}px, ${offset.y || 0}px) translate(-50%, calc(-100% - 10px))`,
           left: originRect.width / 2,
         };
         pointerStyle = {
@@ -276,7 +330,7 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
         };
         popoverStyle = {
           // Center and adjust 10px for the pointer (already positioned at the bottom of container)
-          transform: `translate(${offset.x || 0}px) translate(-50%, 10px)`,
+          transform: `translate(${offset.x || 0}px, ${offset.y || 0}px) translate(-50%, 10px)`,
           left: originRect.width / 2,
         };
         pointerStyle = {
@@ -294,7 +348,7 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
         };
         popoverStyle = {
           // Center, place on left of container, and adjust 10px for the pointer
-          transform: `translate(0, ${offset.y || 0}px) translate(calc(-100% - 10px), -50%)`,
+          transform: `translate(${offset.x || 0}px, ${offset.y || 0}px) translate(calc(-100% - 10px), -50%)`,
           top: originRect.height / 2,
         };
         pointerStyle = {
@@ -312,7 +366,7 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
         };
         popoverStyle = {
           // Center and adjust 10px for the pointer
-          transform: `translate(0, ${offset.y || 0}px) translate(10px, -50%)`,
+          transform: `translate(${offset.x || 0}px, ${offset.y || 0}px) translate(10px, -50%)`,
           top: originRect.height / 2,
         };
         pointerStyle = {
@@ -369,7 +423,4 @@ class FixedPopover extends Component<FixedPopoverProps, FixedPopoverState> {
   }
 }
 
-export default compose(
-  FixedPopover,
-  AutoFocuses
-);
+export default compose(FixedPopover, AutoFocuses);

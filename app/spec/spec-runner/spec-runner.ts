@@ -1,8 +1,5 @@
 /* eslint global-require:0 */
 import _ from 'underscore';
-import Enzyme from 'enzyme';
-import Adapter from 'enzyme-adapter-react-16';
-
 import ReactTestUtils from 'react-dom/test-utils';
 import Config from '../../src/config';
 import SpecLoader from './spec-loader';
@@ -22,8 +19,6 @@ class SpecRunner {
 
   runSpecs(loadSettings) {
     this.loadSettings = loadSettings;
-
-    Enzyme.configure({ adapter: new Adapter() });
 
     this._extendGlobalWindow();
     this._setupJasmine();
@@ -48,7 +43,7 @@ class SpecRunner {
 
         it: this._makeItAsync(jasmineExports.it),
         // it: jasmineExports.it,
-        fit: this._makeItAsync(jasmineExports.fit),
+        fit: this._makeItAsync((jasmineExports as any).fit),
         xit: jasmineExports.xit,
         runs: jasmineExports.runs,
         waits: jasmineExports.waits,
@@ -90,7 +85,7 @@ class SpecRunner {
 
   _makeSurroundAsync(jasmineBeforeAfter) {
     const self = this;
-    return userFn => {
+    return (userFn) => {
       return jasmineBeforeAfter(function asyncBeforeAfter() {
         self._runAsync.call(this, userFn);
       });
@@ -115,16 +110,33 @@ class SpecRunner {
 
     AppEnv.restoreWindowDimensions();
     AppEnv.themes.loadStaticStylesheets();
-    AppEnv.themes.requireStylesheet('../../static/style/jasmine');
+    AppEnv.themes.requireStylesheet('../static/style/jasmine');
     AppEnv.keymaps.loadKeymaps();
   }
 
   _setupWindow() {
-    window.addEventListener('beforeunload', (e) => {
-      // TODO(flotwig): figure out a way to stop the tests from quitting prematurely that is not this
-      e.returnValue = 'foo'
+    window.addEventListener('beforeunload', () => {
       AppEnv.storeWindowDimensions();
       AppEnv.saveWindowState();
+    });
+
+    // Log full stack traces for uncaught errors and unhandled promise rejections,
+    // since Chromium's default renderer error logging only shows the message and
+    // compiled-JS line number — no call stack.
+    window.addEventListener('error', (e) => {
+      if (e.error && e.error.stack) {
+        console.error('Uncaught error (stack):\n' + e.error.stack);
+      } else {
+        console.error('Uncaught error:\n' + e.error);
+      }
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      const r = e.reason;
+      if (r && r.stack) {
+        console.error('Unhandled promise rejection (stack):\n' + r.stack);
+      } else if (r) {
+        console.error('Unhandled promise rejection:', r);
+      }
     });
   }
 
@@ -140,7 +152,11 @@ class SpecRunner {
       // global scope before it gets extended. This is done in
       // `_extendGlobalWindow`
       require('jasmine-reporters');
-      const jUnitXmlReporter = new jasmine.JUnitXmlReporter(loadSettings.jUnitXmlPath, true, true);
+      const jUnitXmlReporter = new (jasmine as any).JUnitXmlReporter(
+        loadSettings.jUnitXmlPath,
+        true,
+        true
+      );
       this.jasmineEnv.addReporter(jUnitXmlReporter);
     }
     this.jasmineEnv.addReporter(timeReporter);

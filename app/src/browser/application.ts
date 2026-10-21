@@ -1,8 +1,20 @@
 /* eslint global-require: "off" */
 
-import { BrowserWindow, Menu, app, ipcMain, dialog, nativeImage, shell } from 'electron';
+import '../safe-shell';
+import {
+  BrowserWindow,
+  ClipboardItem,
+  Menu,
+  app,
+  clipboard,
+  ipcMain,
+  dialog,
+  nativeImage,
+  powerMonitor,
+  shell,
+} from 'electron';
 
-import fs from 'fs-plus';
+import fs from 'fs';
 import url from 'url';
 import path from 'path';
 import proc from 'child_process';
@@ -13,17 +25,50 @@ import WindowManager from './window-manager';
 import FileListCache from './file-list-cache';
 import ConfigMigrator from './config-migrator';
 import ApplicationMenu from './application-menu';
-import ApplicationTouchBar from './application-touch-bar';
 import AutoUpdateManager from './autoupdate-manager';
+import SystemAccentWatcher from './system-accent-watcher';
 import SystemTrayManager from './system-tray-manager';
 import { DefaultClientHelper } from '../default-client-helper';
+import { developerToolsAvailable } from '../developer-tools';
 import MailspringProtocolHandler from './mailspring-protocol-handler';
 import ConfigPersistenceManager from './config-persistence-manager';
 import moveToApplications from './move-to-applications';
 import { MailsyncProcess } from '../mailsync-process';
 import Config from '../config';
+import { registerQuickpreviewIPCHandlers } from './quickpreview-ipc';
+import { registerLocalAIIPCHandlers } from './local-ai-service';
+import { registerViewSessionIPCHandlers } from './view-sessions';
+import { guardAuxiliaryWindowNavigation } from './auxiliary-window-guard';
+import { onFromMailspringWindows, handleFromMailspringWindows } from './trusted-ipc';
+import {
+  handleWindowsToastXMLProtocolAction,
+  registerNotificationIPCHandlers,
+} from './notification-ipc';
+import WindowsTaskbarManager from './windows-taskbar-manager';
+import { resetThemeForRecovery } from './theme-recovery';
 
-let clipboard = null;
+// The options renderers may pass to `new-window`: what the popout composer (DraftStore) and
+// thread popout (MessageStore) send, plus window sizing for plugins. The main process sets
+// every other load setting itself, since some (like `bootstrapScript`) choose the code a
+// nodeIntegration window runs.
+const RENDERER_WINDOW_OPTIONS = [
+  'title',
+  'hidden',
+  'windowKey',
+  'windowType',
+  'windowProps',
+  'width',
+  'height',
+  'bounds',
+];
+
+function rendererWindowOptions(options: Record<string, unknown>) {
+  const safe: Record<string, unknown> = {};
+  for (const key of RENDERER_WINDOW_OPTIONS) {
+    if (key in options) safe[key] = options[key];
+  }
+  return safe;
+}
 
 // The application's singleton class.
 //
@@ -39,16 +84,20 @@ export default class Application extends EventEmitter {
 
   configMigrator: ConfigMigrator;
   configPersistenceManager: ConfigPersistenceManager;
-  touchBar: ApplicationTouchBar;
   fileListCache: FileListCache;
   applicationMenu: ApplicationMenu;
   mailspringProtocolHandler: MailspringProtocolHandler;
   windowManager: WindowManager;
   autoUpdateManager: AutoUpdateManager;
+  systemAccentWatcher: SystemAccentWatcher;
   systemTrayManager: SystemTrayManager;
+  windowsTaskbarManager?: WindowsTaskbarManager;
 
   _sourceWindows: { [taskId: string]: BrowserWindow } = {};
   _resettingAndRelaunching: boolean;
+  _initialized = false;
+  _pendingLaunchOptions: any[] = [];
+  _pendingUrls: string[] = [];
 
   async start(options) {
     const { resourcePath, configDirPath, version, devMode, specMode, safeMode } = options;
@@ -107,6 +156,16 @@ export default class Application extends EventEmitter {
     const config = new Config();
     this.config = config;
     this.configPersistenceManager = new ConfigPersistenceManager({ configDirPath, resourcePath });
+
+    // If the user's config.json could not be read (eg: corrupted / truncated on disk)
+    // and they chose to quit from the error dialog, ConfigPersistenceManager has
+    // already called app.quit() and left `settings` empty. app.quit() does not halt
+    // synchronous execution, so without this check we'd continue on to config.load(),
+    // which throws because there are no settings to load, reporting a confusing
+    // "this.settings is empty" error on our way out the door. Stop here instead.
+    if (this.configPersistenceManager.userWantsToPreserveErrors) {
+      return;
+    }
     config.load();
 
     this.configMigrator = new ConfigMigrator(this.config);
@@ -120,6 +179,7 @@ export default class Application extends EventEmitter {
     await this.oneTimeMoveToApplications();
     await this.oneTimeAddToDock();
 
+    guardAuxiliaryWindowNavigation();
     this.autoUpdateManager = new AutoUpdateManager(version, config, specMode);
     this.applicationMenu = new ApplicationMenu(version);
     this.windowManager = new WindowManager({
@@ -132,13 +192,30 @@ export default class Application extends EventEmitter {
       initializeInBackground: initializeInBackground,
     });
     this.systemTrayManager = new SystemTrayManager(process.platform, this);
-    if (process.platform === 'darwin') {
-      this.touchBar = new ApplicationTouchBar(resourcePath);
+    this.systemAccentWatcher = new SystemAccentWatcher();
+    this.systemAccentWatcher.on('change', (color: string) => {
+      this.windowManager.sendToAllWindows('system-accent-color-changed', {}, color);
+    });
+    this.systemAccentWatcher.on('dark-mode-change', (darkMode: boolean) => {
+      this.windowManager.sendToAllWindows('system-dark-mode-changed', {}, darkMode);
+    });
+    if (process.platform === 'win32') {
+      this.windowsTaskbarManager = new WindowsTaskbarManager(this);
     }
 
-    this.setupJavaScriptArguments();
     this.handleEvents();
+
+    // Mark initialization complete, then process the initial launch options
+    // followed by any second-instance options that arrived while we were
+    // still awaiting async initialization steps above.
+    this._initialized = true;
     this.handleLaunchOptions(options);
+    for (const pendingOpts of this._pendingLaunchOptions.splice(0)) {
+      this.handleLaunchOptions(pendingOpts);
+    }
+    for (const pendingUrl of this._pendingUrls.splice(0)) {
+      this.openUrl(pendingUrl);
+    }
 
     if (process.platform === 'linux') {
       const helper = new DefaultClientHelper();
@@ -163,6 +240,15 @@ export default class Application extends EventEmitter {
 
   // Opens a new window based on the options provided.
   handleLaunchOptions(options) {
+    // If start() hasn't finished initializing yet (e.g. a second-instance event
+    // arrives while the async mailsync migration or oneTimeMoveToApplications is
+    // still running), windowManager won't exist yet.  Queue the options and
+    // process them once initialization is complete.
+    if (!this._initialized) {
+      this._pendingLaunchOptions.push(options);
+      return;
+    }
+
     const { specMode, pathsToOpen, urlsToOpen } = options;
 
     if (specMode) {
@@ -187,12 +273,15 @@ export default class Application extends EventEmitter {
       return;
     }
 
-    this.openWindowsForTokenState();
+    const hasPaths = pathsToOpen instanceof Array && pathsToOpen.length > 0;
+    const hasUrls = urlsToOpen instanceof Array && urlsToOpen.length > 0;
 
-    if (pathsToOpen instanceof Array && pathsToOpen.length > 0) {
+    this.ensureWindowsForTokenState({ preserveHiddenOrMinimized: hasPaths || hasUrls });
+
+    if (hasPaths) {
       this.openComposerWithFiles(pathsToOpen);
     }
-    if (urlsToOpen instanceof Array) {
+    if (hasUrls) {
       for (const urlToOpen of urlsToOpen) {
         this.openUrl(urlToOpen);
       }
@@ -233,7 +322,7 @@ export default class Application extends EventEmitter {
   // exit and then delete the file. It's hard to tell when this happens, so we just
   // retry the deletion a few times.
   deleteFileWithRetry(filePath, callback = () => {}, retries = 5) {
-    const callbackWithRetry = err => {
+    const callbackWithRetry = (err: NodeJS.ErrnoException | null) => {
       if (err && err.message.indexOf('no such file') === -1) {
         console.log(`File Error: ${err.message} - retrying in 150msec`);
         setTimeout(() => {
@@ -256,13 +345,7 @@ export default class Application extends EventEmitter {
     }
   }
 
-  // Configures required javascript environment flags.
-  setupJavaScriptArguments() {
-    app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-    app.commandLine.appendSwitch('js-flags', '--harmony');
-  }
-
-  openWindowsForTokenState() {
+  ensureWindowsForTokenState(behavior?: { preserveHiddenOrMinimized: boolean }) {
     // user may trigger this using the application menu / by focusing the app
     // before migration has completed and the config has been loaded.
     if (!this.config || !this.windowManager) return;
@@ -271,11 +354,10 @@ export default class Application extends EventEmitter {
     const hasAccount = accounts && accounts.length > 0;
 
     if (hasAccount) {
-      this.windowManager.ensureWindow(WindowManager.MAIN_WINDOW);
+      this.windowManager.ensureWindow(WindowManager.MAIN_WINDOW, {}, behavior);
     } else {
-      this.windowManager.ensureWindow(WindowManager.ONBOARDING_WINDOW, {
-        title: localized('Welcome to Mailspring'),
-      });
+      const title = localized('Welcome to Mailspring');
+      this.windowManager.ensureWindow(WindowManager.ONBOARDING_WINDOW, { title }, behavior);
     }
   }
 
@@ -302,7 +384,7 @@ export default class Application extends EventEmitter {
     this._deleteDatabase(done);
   };
 
-  _deleteDatabase = callback => {
+  _deleteDatabase = (callback) => {
     this.deleteFileWithRetry(path.join(this.configDirPath, 'edgehill.db'), callback);
     this.deleteFileWithRetry(path.join(this.configDirPath, 'edgehill.db-wal'));
     this.deleteFileWithRetry(path.join(this.configDirPath, 'edgehill.db-shm'));
@@ -369,14 +451,14 @@ export default class Application extends EventEmitter {
       }
     });
 
-    this.on('application:add-account', ({ existingAccountJSON } = {}) => {
+    this.on('application:add-account', ({ existingAccountJSON, o365SharedMailbox } = {}) => {
       const onboarding = this.windowManager.get(WindowManager.ONBOARDING_WINDOW);
       if (onboarding) {
         onboarding.show();
         onboarding.focus();
       } else {
         this.windowManager.ensureWindow(WindowManager.ONBOARDING_WINDOW, {
-          windowProps: { addingAccount: true, existingAccountJSON },
+          windowProps: { addingAccount: true, existingAccountJSON, o365SharedMailbox },
           title: localized('Add Account'),
         });
       }
@@ -389,12 +471,22 @@ export default class Application extends EventEmitter {
       }
     });
 
-    this.on('application:show-calendar', () => {
-      this.windowManager.ensureWindow(WindowManager.CALENDAR_WINDOW, {});
-      const main = this.windowManager.get(WindowManager.MAIN_WINDOW);
-      if (main) {
-        main.sendMessage('run-calendar-sync');
-      }
+    // Unlike show-main-window (tray, Preferences), these also switch the main window's section.
+    this.on('application:show-mail', () => {
+      this.ensureWindowsForTokenState();
+      this.windowManager.get(WindowManager.MAIN_WINDOW)?.sendMessage('show-mail');
+    });
+
+    // `focusEvent` names an event to show; the menu item passes none.
+    this.on('application:show-calendar', (focusEvent?: unknown) => {
+      this.ensureWindowsForTokenState();
+      this.windowManager.get(WindowManager.MAIN_WINDOW)?.sendMessage('show-calendar', focusEvent);
+    });
+
+    // Only the main window's MailsyncBridge has sync clients, so other windows route a
+    // refresh through here.
+    this.on('application:sync-calendar', (accountId?: string) => {
+      this.sendCalendarSync(accountId);
     });
 
     this.on('application:show-contacts', () => {
@@ -406,7 +498,7 @@ export default class Application extends EventEmitter {
     });
 
     this.on('application:view-help', () => {
-      const helpUrl = 'https://community.getmailspring.com/docs';
+      const helpUrl = 'https://getmailspring.com/docs/';
       shell.openExternal(helpUrl);
     });
 
@@ -428,7 +520,7 @@ export default class Application extends EventEmitter {
     });
 
     this.on('application:show-main-window', () => {
-      this.openWindowsForTokenState();
+      this.ensureWindowsForTokenState();
     });
 
     this.on('application:check-for-update', () => {
@@ -442,9 +534,10 @@ export default class Application extends EventEmitter {
     });
 
     this.on('application:toggle-dev', () => {
+      if (!developerToolsAvailable()) return;
       let args = process.argv.slice(1);
       if (args.includes('--dev')) {
-        args = args.filter(a => a !== '--dev');
+        args = args.filter((a) => a !== '--dev');
       } else {
         args.push('--dev');
       }
@@ -455,7 +548,11 @@ export default class Application extends EventEmitter {
     this.on('application:view-license', () => {
       // Workaround to correctly get the unpacked path of the licenses file.
       // For more information, see: https://github.com/electron/electron/issues/6262
-      shell.openPath(path.join(this.resourcePath, 'static', 'all_licenses.html').replace("app.asar", "app.asar.unpacked"));
+      shell.openPath(
+        path
+          .join(this.resourcePath, 'static', 'all_licenses.html')
+          .replace('app.asar', 'app.asar.unpacked')
+      );
     });
 
     if (process.platform === 'darwin') {
@@ -530,11 +627,11 @@ export default class Application extends EventEmitter {
     });
 
     // System Tray
-    ipcMain.on('update-system-tray', (event, iconPath, unreadString, isTemplateImg) => {
-      this.systemTrayManager.updateTraySettings(iconPath, unreadString, isTemplateImg);
+    onFromMailspringWindows(ipcMain, 'update-system-tray', (event, iconPath, unreadString) => {
+      this.systemTrayManager.updateTraySettings(iconPath, unreadString);
     });
 
-    ipcMain.on('set-badge-value', (event, value) => {
+    onFromMailspringWindows(ipcMain, 'set-badge-value', (event, value) => {
       if (app.dock && app.dock.setBadge) {
         app.dock.setBadge(value);
       } else if (app.setBadgeCount) {
@@ -551,17 +648,17 @@ export default class Application extends EventEmitter {
 
     app.whenReady().then(() => {
       if (process.platform === 'darwin') {
-        app.dock.setMenu(dockMenu)
+        app.dock.setMenu(dockMenu);
       }
-    })
+    });
 
-    ipcMain.on('new-window', (event, options) => {
+    onFromMailspringWindows(ipcMain, 'new-window', (event, options) => {
       const win = options.windowKey ? this.windowManager.get(options.windowKey) : null;
       if (win) {
         win.show();
         win.focus();
       } else {
-        this.windowManager.newWindow(options);
+        this.windowManager.newWindow(rendererWindowOptions(options));
       }
     });
 
@@ -569,23 +666,57 @@ export default class Application extends EventEmitter {
 
     let userResetTheme = false;
 
-    ipcMain.on('encountered-theme-error', (event, { message, detail }) => {
+    handleFromMailspringWindows(ipcMain, 'get-system-accent-color', () => {
+      return this.systemAccentWatcher ? this.systemAccentWatcher.getCurrent() : null;
+    });
+
+    // Synchronous because ThemeManager needs the value during its constructor to
+    // pick the initial ui-light / ui-dark variant without a flash.
+    onFromMailspringWindows(
+      ipcMain,
+      'get-system-dark-mode-sync',
+      (event: Electron.IpcMainEvent) => {
+        event.returnValue = this.systemAccentWatcher
+          ? this.systemAccentWatcher.getDarkMode()
+          : false;
+      }
+    );
+
+    onFromMailspringWindows(ipcMain, 'encountered-theme-error', (event, { message, detail }) => {
       if (userResetTheme) return;
+
+      // showMessageBoxSync blocks the main process indefinitely in headless
+      // test environments (xvfb can't render or accept input), hanging the
+      // spec suite until the 20 minute CI timeout.
+      if (this.specMode) {
+        console.error(`${message}\n${detail}`);
+        return;
+      }
 
       const buttonIndex = dialog.showMessageBoxSync({
         type: 'warning',
-        buttons: [localized('Reset Theme'), localized('Continue')],
+        buttons: [localized('Reset Theme and Restart'), localized('Continue')],
         defaultId: 0,
         message,
-        detail,
+        detail: `${detail}\n\n${localized(
+          'Reset Theme and Restart restores the bundled automatic, light, and dark themes, clears cached theme styles, and restarts Mailspring. Your accounts, mail, plugins, and other settings are not changed.'
+        )}`,
       });
       if (buttonIndex === 0) {
         userResetTheme = true;
-        this.config.set('core.theme', '');
+        const cacheClearErrors = resetThemeForRecovery(this.config, this.configDirPath);
+        for (const error of cacheClearErrors) {
+          console.warn(`Theme was reset but a compiled LESS cache could not be removed: ${error}`);
+        }
+        // Relaunch rather than recompiling in place: the renderer still holds
+        // the failed theme's cache open, and a clean start is the only way to
+        // guarantee the bundled themes load without leftover state.
+        app.relaunch();
+        app.quit();
       }
     });
 
-    ipcMain.on('inline-style-parse', (event, { html, key }) => {
+    onFromMailspringWindows(ipcMain, 'inline-style-parse', (event, { html, key }) => {
       const juice = require('juice');
       let out = null;
       try {
@@ -605,63 +736,118 @@ export default class Application extends EventEmitter {
       }
     });
 
+    // The sync engine's retry wait only counts awake time, so after sleep it can sit out
+    // its full 120s interval before reconnecting unless the main window wakes it.
+    const onSystemResumed = () => {
+      const main = this.windowManager.get(WindowManager.MAIN_WINDOW);
+      if (main) {
+        main.sendMessage('system-resumed');
+      }
+    };
+    powerMonitor.on('resume', onSystemResumed);
+    powerMonitor.on('unlock-screen', onSystemResumed);
+
     app.on('activate', (event, hasVisibleWindows) => {
       if (!hasVisibleWindows) {
-        this.openWindowsForTokenState();
+        this.ensureWindowsForTokenState();
       }
       event.preventDefault();
     });
 
-    ipcMain.on('update-application-menu', (event, template, keystrokesByCommand) => {
-      const win = BrowserWindow.fromWebContents(event.sender);
-      this.applicationMenu.update(win, template, keystrokesByCommand);
-      if (win === this.getMainWindow() && process.platform === 'darwin') {
-        this.touchBar.update(template);
+    onFromMailspringWindows(
+      ipcMain,
+      'update-application-menu',
+      (event, template, keystrokesByCommand) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        if (win) {
+          this.applicationMenu.update(win, template, keystrokesByCommand);
+        }
       }
-    });
+    );
 
-    ipcMain.on('command', (event, command, ...args) => {
+    onFromMailspringWindows(ipcMain, 'command', (event, command, ...args) => {
+      if (typeof command !== 'string' || !command.startsWith('application:')) return;
       this.emit(command, ...args);
     });
 
-    ipcMain.on('window-command', (event, command, ...args) => {
+    onFromMailspringWindows(ipcMain, 'window-command', (event, command, ...args) => {
       const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win) return;
       win.emit(command, ...args);
     });
 
-    ipcMain.on('call-window-method', (event, method, ...args) => {
+    const ALLOWED_WINDOW_METHODS = new Set([
+      'setPosition',
+      'center',
+      'focus',
+      'show',
+      'hide',
+      'maximize',
+      'minimize',
+      'setFullScreen',
+    ]);
+    const ALLOWED_WEBCONTENTS_METHODS = new Set(
+      developerToolsAvailable() ? ['reload', 'openDevTools', 'toggleDevTools'] : ['reload']
+    );
+    const ALLOWED_DEVTOOLS_WEBCONTENTS_METHODS = new Set(['executeJavaScript']);
+
+    onFromMailspringWindows(ipcMain, 'call-window-method', (event, method, ...args) => {
+      if (!ALLOWED_WINDOW_METHODS.has(method)) {
+        console.error(`Method ${method} is not permitted on BrowserWindow!`);
+        return;
+      }
       const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win) return;
       if (!win[method]) {
         console.error(`Method ${method} does not exist on BrowserWindow!`);
+        return;
       }
       win[method](...args);
     });
 
-    ipcMain.on('call-devtools-webcontents-method', (event, method, ...args) => {
-      // If devtools aren't open the `webContents::devToolsWebContents` will be null
-      if (event.sender.devToolsWebContents) {
+    onFromMailspringWindows(
+      ipcMain,
+      'call-devtools-webcontents-method',
+      (event, method, ...args) => {
+        if (!ALLOWED_DEVTOOLS_WEBCONTENTS_METHODS.has(method)) {
+          console.error(`Method ${method} is not permitted on devToolsWebContents!`);
+          return;
+        }
+        // If devtools aren't open the `webContents::devToolsWebContents` will be null
+        if (!event.sender.devToolsWebContents) {
+          return;
+        }
+        if (!event.sender.devToolsWebContents[method]) {
+          console.error(`Method ${method} does not exist on devToolsWebContents!`);
+          return;
+        }
         event.sender.devToolsWebContents[method](...args);
       }
-    });
+    );
 
-    ipcMain.on('call-webcontents-method', (event, method, ...args) => {
+    onFromMailspringWindows(ipcMain, 'call-webcontents-method', (event, method, ...args) => {
+      if (!ALLOWED_WEBCONTENTS_METHODS.has(method)) {
+        console.error(`Method ${method} is not permitted on WebContents!`);
+        return;
+      }
       if (!event.sender[method]) {
         console.error(`Method ${method} does not exist on WebContents!`);
+        return;
       }
       event.sender[method](...args);
     });
 
-    ipcMain.on('mailsync-bridge-rebroadcast-to-all', (event, ...args) => {
+    onFromMailspringWindows(ipcMain, 'mailsync-bridge-rebroadcast-to-all', (event, ...args) => {
       const win = BrowserWindow.fromWebContents(event.sender);
       this.windowManager.sendToAllWindows('mailsync-bridge-message', { except: win }, ...args);
     });
 
-    ipcMain.on('action-bridge-rebroadcast-to-all', (event, ...args) => {
+    onFromMailspringWindows(ipcMain, 'action-bridge-rebroadcast-to-all', (event, ...args) => {
       const win = BrowserWindow.fromWebContents(event.sender);
       this.windowManager.sendToAllWindows('action-bridge-message', { except: win }, ...args);
     });
 
-    ipcMain.on('action-bridge-rebroadcast-to-default', (event, ...args) => {
+    onFromMailspringWindows(ipcMain, 'action-bridge-rebroadcast-to-default', (event, ...args) => {
       const mainWindow = this.windowManager.get(WindowManager.MAIN_WINDOW);
       if (!mainWindow || !mainWindow.browserWindow.webContents) {
         return;
@@ -672,26 +858,36 @@ export default class Application extends EventEmitter {
       mainWindow.browserWindow.webContents.send('action-bridge-message', ...args);
     });
 
-    ipcMain.on('write-image-to-clipboard', (event, dataURL) => {
+    onFromMailspringWindows(ipcMain, 'write-image-to-clipboard', (event, dataURL) => {
       // This can't be done from the renderer due to https://github.com/electron/electron/issues/8151
-      clipboard = require('electron').clipboard;
-      clipboard.writeImage(nativeImage.createFromDataURL(dataURL));
+      const png = nativeImage.createFromDataURL(dataURL).toPNG();
+      clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
     });
 
-    ipcMain.on('write-text-to-selection-clipboard', (event, selectedText) => {
-      clipboard = require('electron').clipboard;
-      clipboard.writeText(selectedText, 'selection');
+    onFromMailspringWindows(ipcMain, 'write-text-to-selection-clipboard', (event, selectedText) => {
+      if (clipboard.selection) clipboard.selection.writeText(selectedText);
     });
 
-    ipcMain.on('account-setup-successful', () => {
+    onFromMailspringWindows(ipcMain, 'account-setup-successful', () => {
       this.windowManager.ensureWindow(WindowManager.MAIN_WINDOW);
+      const mainWindow = this.windowManager.get(WindowManager.MAIN_WINDOW);
       const onboarding = this.windowManager.get(WindowManager.ONBOARDING_WINDOW);
       if (onboarding) {
-        onboarding.close();
+        if (mainWindow) {
+          // Wait for the main window to finish loading before closing onboarding.
+          // On Wayland, closing the onboarding window (which holds the activation
+          // context) before the main window is visible causes show() to fail
+          // silently because the activation context is lost.
+          mainWindow.waitForLoad(() => {
+            onboarding.close();
+          });
+        } else {
+          onboarding.close();
+        }
       }
     });
 
-    ipcMain.on('run-in-window', (event, params) => {
+    onFromMailspringWindows(ipcMain, 'run-in-window', (event, params) => {
       const sourceWindow = BrowserWindow.fromWebContents(event.sender);
       this._sourceWindows[params.taskId] = sourceWindow;
 
@@ -709,30 +905,88 @@ export default class Application extends EventEmitter {
       targetWindow.browserWindow.webContents.send('run-in-window', params);
     });
 
-    ipcMain.on('remote-run-results', (event, params) => {
+    onFromMailspringWindows(ipcMain, 'remote-run-results', (event, params) => {
       const sourceWindow = this._sourceWindows[params.taskId];
       sourceWindow.webContents.send('remote-run-results', params);
       delete this._sourceWindows[params.taskId];
     });
 
-    ipcMain.on('report-error', (event, params: { extra?: string; errorJSON?: string } = {}) => {
-      try {
-        const errorParams = JSON.parse(params.errorJSON || '{}');
-        const extra = JSON.parse(params.extra || '{}');
-        let err = new Error();
-        err = Object.assign(err, errorParams);
-        global.errorLogger.reportError(err, extra);
-      } catch (parseError) {
-        console.error(parseError);
-        global.errorLogger.reportError(parseError, {});
-      }
-      event.returnValue = true;
-    });
+    onFromMailspringWindows(
+      ipcMain,
+      'report-error',
+      (event, params: { extra?: string; errorJSON?: string } = {}) => {
+        try {
+          const errorParams = JSON.parse(params.errorJSON || '{}');
+          const extra = JSON.parse(params.extra || '{}');
 
-    ipcMain.on('resize-window', (event, params) => {
+          // LESS compilation errors from custom themes/plugins are already handled
+          // by the theme error dialog (encountered-theme-error IPC handler). These
+          // errors have no useful stack trace when reported to Sentry because
+          // LessError objects don't carry a JS stack, so the Sentry report only
+          // shows the IPC handler call site. Skip reporting them.
+          if (
+            errorParams &&
+            typeof errorParams === 'object' &&
+            typeof errorParams.line === 'number' &&
+            Array.isArray(errorParams.extract) &&
+            (errorParams.type === 'Parse' || errorParams.type === 'Syntax')
+          ) {
+            event.returnValue = true;
+            return;
+          }
+
+          // Use new Error(message) to ensure the message is set as a proper Error property,
+          // since Object.assign on an Error with no initial message may not propagate it
+          // correctly to error reporting tools like Sentry/Raven.
+          const message =
+            errorParams && typeof errorParams === 'object' ? errorParams.message : undefined;
+          const stack =
+            errorParams && typeof errorParams === 'object' ? errorParams.stack : undefined;
+
+          // Drop reports with neither a message nor a stack: they would surface
+          // in Sentry as "Unknown error" with only this IPC handler frame,
+          // which is unactionable. The renderer wraps inputs before sending so
+          // this is defense-in-depth for any path that bypasses that wrapping.
+          if (!message && !stack) {
+            event.returnValue = true;
+            return;
+          }
+
+          const err = new Error(message || undefined);
+          if (stack) {
+            err.stack = stack;
+          }
+          Object.assign(err, errorParams);
+          global.errorLogger.reportError(err, extra);
+        } catch (parseError) {
+          console.error(parseError);
+          global.errorLogger.reportError(parseError, {});
+        }
+        event.returnValue = true;
+      }
+    );
+
+    onFromMailspringWindows(ipcMain, 'resize-window', (event, params) => {
       const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!sourceWindow) return;
       sourceWindow.setSize(params.width, params.height);
     });
+
+    registerQuickpreviewIPCHandlers(ipcMain);
+    registerNotificationIPCHandlers(ipcMain);
+    registerViewSessionIPCHandlers(ipcMain);
+    registerLocalAIIPCHandlers(ipcMain, {
+      configDirPath: this.configDirPath,
+      config: this.config,
+      devMode: this.devMode,
+    });
+  }
+
+  sendCalendarSync(accountId?: string) {
+    const main = this.windowManager.get(WindowManager.MAIN_WINDOW);
+    if (main) {
+      main.sendMessage('run-calendar-sync', accountId);
+    }
   }
 
   // Public: Executes the given command.
@@ -764,7 +1018,9 @@ export default class Application extends EventEmitter {
             focusedBrowserWindow.reload();
             break;
           case 'window:toggle-dev-tools':
-            focusedBrowserWindow.webContents.toggleDevTools();
+            if (developerToolsAvailable()) {
+              focusedBrowserWindow.webContents.toggleDevTools();
+            }
             break;
           case 'window:close':
             focusedBrowserWindow.close();
@@ -798,7 +1054,7 @@ export default class Application extends EventEmitter {
 
   // Translates the command into OS X action and sends it to application's first
   // responder.
-  sendCommandToFirstResponder = command => {
+  sendCommandToFirstResponder = (command) => {
     if (process.platform !== 'darwin') {
       return false;
     }
@@ -822,7 +1078,20 @@ export default class Application extends EventEmitter {
   // Open a mailto:// url.
   //
   openUrl(urlToOpen) {
-    const parts = url.parse(urlToOpen);
+    if (!this._initialized) {
+      this._pendingUrls.push(urlToOpen);
+      return;
+    }
+
+    // url.parse throws on malformed input, and the URL comes from whatever app
+    // launched us (MAILSPRING-CLIENT-M2).
+    let parts: url.UrlWithParsedQuery;
+    try {
+      parts = url.parse(urlToOpen, true);
+    } catch (err) {
+      console.warn(`Ignoring URL - could not parse ${urlToOpen}: ${err.message}`);
+      return;
+    }
     const main = this.windowManager.get(WindowManager.MAIN_WINDOW);
 
     if (!main) {
@@ -833,8 +1102,25 @@ export default class Application extends EventEmitter {
     if (parts.protocol === 'mailto:') {
       main.sendMessage('mailto', urlToOpen);
     } else if (parts.protocol === 'mailspring:') {
-      if (parts.host === 'plugins') {
+      // Handle notification action URLs from Windows toast notifications
+      // These URLs are triggered when users click buttons on Windows toast notifications
+      // since Windows toast XML with activationType="background" doesn't work reliably with Electron
+      if (parts.host.startsWith('notification-')) {
+        handleWindowsToastXMLProtocolAction(parts);
+      } else if (parts.host === 'open-inbox') {
+        main.show();
+        main.focus();
+      } else if (parts.host === 'open-preferences') {
+        main.show();
+        main.focus();
+        main.sendMessage('open-preferences');
+      } else if (parts.host === 'plugins') {
         main.sendMessage('changePluginStateFromUrl', urlToOpen);
+      } else if (parts.host === 'install-view') {
+        // A shared View's landing page (getmailspring.com/v/<shareId>) links here.
+        main.show();
+        main.focus();
+        main.sendMessage('install-view', urlToOpen);
       } else {
         main.sendMessage('openThreadFromWeb', urlToOpen);
       }

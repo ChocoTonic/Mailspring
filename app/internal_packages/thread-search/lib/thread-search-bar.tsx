@@ -1,5 +1,4 @@
 import React, { Component } from 'react';
-import PropTypes from 'prop-types';
 import { ListensToFluxStore, RetinaImg, KeyCommandsRegion } from 'mailspring-component-kit';
 import {
   localized,
@@ -29,32 +28,27 @@ interface ThreadSearchBarProps {
   perspective: MailboxPerspective;
 }
 
+type ThreadSearchSuggestion = {
+  token?: string | null;
+  term: string;
+  description: string;
+  termSuggestions?: string[] | ((term: string, accountIds: string[]) => Promise<any>);
+  thread?: any;
+};
+
 interface ThreadSearchBarState {
-  suggestions: {
-    token: string;
-    term: string;
-    description: string;
-    termSuggestions: string[] | ((term: string, accountIds: string[]) => Promise<any>);
-  }[];
+  suggestions: ThreadSearchSuggestion[];
   focused: boolean;
-  selected?: {
-    description: any;
-  };
+  selected?: ThreadSearchSuggestion;
   selectedIdx: number;
 }
 
 class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarState> {
   static displayName = 'ThreadSearchBar';
 
-  static propTypes = {
-    query: PropTypes.string,
-    isSearching: PropTypes.bool,
-    perspective: PropTypes.object,
-  };
-
   _fieldEl: TokenizingContenteditable;
 
-  constructor(props) {
+  constructor(props: ThreadSearchBarProps) {
     super(props);
     this.state = {
       suggestions: TokenSuggestionsForEmpty,
@@ -64,9 +58,9 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
     };
   }
 
-  componentWillReceiveProps(nextProps) {
-    if (nextProps.query !== this.props.query) {
-      this._generateSuggestionsForQuery(nextProps.query);
+  componentDidUpdate(prevProps: ThreadSearchBarProps) {
+    if (prevProps.query !== this.props.query) {
+      this._generateSuggestionsForQuery(this.props.query);
     }
   }
 
@@ -85,7 +79,7 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
       return '';
     }
     const rolesAndPaths = [
-      ...new Set(perspective.categories().map(c => c.role || wrapInQuotes(c.path))),
+      ...new Set(perspective.categories().map((c) => c.role || wrapInQuotes(c.path))),
     ];
     if (rolesAndPaths.length > 1) {
       return `(in:${rolesAndPaths.join(' OR in:')}) `;
@@ -96,7 +90,7 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
     }
   }
 
-  async _generateSuggestionsForQuery(query) {
+  async _generateSuggestionsForQuery(query: string) {
     let insertionIndex = this._fieldEl.insertionIndex();
 
     // Treat the initial query (eg: "in:starred AND ") as if it's
@@ -115,11 +109,11 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
 
     if (token) {
       // show token autocompletion options ala Stripe Dashboard
-      suggestions = TokenSuggestions.filter(s => s.token.startsWith(token));
+      suggestions = TokenSuggestions.filter((s) => s.token.startsWith(token));
 
       if (suggestions.length && suggestions[0].token === token) {
         const { termSuggestions } = suggestions[0];
-        const textToSuggestion = term => ({
+        const textToSuggestion = (term: string) => ({
           term: wrapInQuotes(term),
           description: term.includes(' ') ? wrapInQuotes(term) : term,
           token,
@@ -128,13 +122,13 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
         if (termSuggestions instanceof Function) {
           suggestions = [];
           promises.push(
-            termSuggestions(term, accountIds).then(results => {
+            termSuggestions(term, accountIds).then((results) => {
               suggestions.push(...results.map(textToSuggestion));
             })
           );
         } else {
           suggestions = termSuggestions
-            .filter(t => !term || (t.startsWith(term) && t !== term))
+            .filter((t) => !term || (t.startsWith(term) && t !== term))
             .map(textToSuggestion);
         }
       }
@@ -146,16 +140,16 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
       suggestions = [];
       promises.push(
         Promise.props({
-          subjects: getThreadSuggestions(query, accountIds).then(threads =>
-            threads.map(t => ({
+          subjects: getThreadSuggestions(query, accountIds).then((threads) =>
+            threads.map((t) => ({
               token: null,
               term: wrapInQuotes(t.subject),
               description: t.subject,
               thread: t,
             }))
           ),
-          contacts: getContactSuggestions(query, accountIds).then(results =>
-            results.map(term => ({ token: null, term: wrapInQuotes(term), description: term }))
+          contacts: getContactSuggestions(query, accountIds).then((results) =>
+            results.map((term) => ({ token: null, term: wrapInQuotes(term), description: term }))
           ),
         }).then(({ contacts, subjects }) => {
           suggestions = [...contacts, ...subjects].sort((a, b) => {
@@ -180,7 +174,7 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
     }
   }
 
-  _onFocus = e => {
+  _onFocus = (e: React.FocusEvent) => {
     this.setState({ focused: true });
     if (this.props.query === '') {
       this._onSearchQueryChanged(this._initialQueryForPerspective());
@@ -188,14 +182,14 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
     }
   };
 
-  _onBlur = e => {
+  _onBlur = (e: React.FocusEvent) => {
     this.setState({ focused: false });
     if (this.props.query === this._initialQueryForPerspective()) {
       this._onSearchQueryChanged('');
     }
   };
 
-  _onKeyDown = e => {
+  _onKeyDown = (e: React.KeyboardEvent) => {
     const { suggestions, selected, selectedIdx } = this.state;
     const delta = { 40: 1, 38: -1 }[e.keyCode];
 
@@ -226,7 +220,7 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
     }
   };
 
-  _onChooseSuggestion = suggestion => {
+  _onChooseSuggestion = (suggestion: ThreadSearchSuggestion) => {
     const { query } = this.props;
 
     let nextQuery = null;
@@ -245,7 +239,7 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
         `${suggestion.token}:${suggestion.term}`,
         query.substr(index + length).trim(),
       ]
-        .filter(s => s.length)
+        .filter((s) => s.length)
         .join(' ');
     } else {
       nextQuery = suggestion.term;
@@ -265,7 +259,7 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
     }
   };
 
-  _onSearchQueryChanged = async query => {
+  _onSearchQueryChanged = async (query: string) => {
     if (query === this.props.query) {
       return;
     }
@@ -275,9 +269,9 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
     }
   };
 
-  _setSuggestionState = suggestions => {
+  _setSuggestionState = (suggestions: ThreadSearchSuggestion[]) => {
     const sameItemIdx = suggestions.findIndex(
-      s => this.state.selected && s.description === this.state.selected.description
+      (s) => this.state.selected && s.description === this.state.selected.description
     );
     const backupIdx = Math.max(-1, Math.min(this.state.selectedIdx, suggestions.length - 1));
     const selectedIdx = sameItemIdx !== -1 ? sameItemIdx : backupIdx;
@@ -289,12 +283,12 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
     });
   };
 
-  _onSubmitSearchQuery = nextQuery => {
+  _onSubmitSearchQuery = (nextQuery: string) => {
     Actions.searchQuerySubmitted(nextQuery);
     this._fieldEl.blur();
   };
 
-  _onClearSearchQuery = (e?: React.MouseEvent) => {
+  _onClearSearchQuery = (e?: React.MouseEvent | React.KeyboardEvent) => {
     if (this.props.query !== '') {
       Actions.searchQuerySubmitted('');
     } else {
@@ -326,9 +320,14 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
     const showPlaceholder = !this.state.focused && !query;
     const showX = this.state.focused || !!(perspective as any).searchQuery;
 
+    const suggestionsVisible = this.state.suggestions.length > 0 && this.state.focused;
+
     return (
       <KeyCommandsRegion
         className={`thread-search-bar ${showPlaceholder ? 'placeholder' : ''}`}
+        role="combobox"
+        aria-expanded={suggestionsVisible}
+        aria-haspopup="listbox"
         globalHandlers={{
           'core:focus-search': () => {
             // If the user is in list mode, we need to clear the selection because the
@@ -356,12 +355,15 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
           />
         )}
         <TokenizingContenteditable
-          ref={el => (this._fieldEl = el)}
+          ref={(el) => (this._fieldEl = el)}
           value={showPlaceholder ? this._placeholder() : query}
           onKeyDown={this._onKeyDown}
           onFocus={this._onFocus}
           onBlur={this._onBlur}
           onChange={this._onSearchQueryChanged}
+          aria-label={this._placeholder()}
+          role="searchbox"
+          aria-autocomplete="list"
         />
         {showX && (
           <RetinaImg
@@ -371,42 +373,43 @@ class ThreadSearchBar extends Component<ThreadSearchBarProps, ThreadSearchBarSta
             onMouseDown={this._onClearSearchQuery}
           />
         )}
-        {this.state.suggestions.length > 0 &&
-          this.state.focused && (
-            <div className="suggestions">
-              {suggestions.map((s, idx) => (
-                <div
-                  onMouseDown={e => {
-                    this._onChooseSuggestion(s);
+        {suggestionsVisible && (
+          <div className="suggestions" role="listbox">
+            {suggestions.map((s, idx) => (
+              <div
+                onMouseDown={(e) => {
+                  this._onChooseSuggestion(s);
+                  e.preventDefault();
+                }}
+                className={`suggestion ${selectedIdx === idx ? 'selected' : ''}`}
+                role="option"
+                aria-selected={selectedIdx === idx}
+                key={idx}
+              >
+                {s.token && <span className="suggestion-token">{s.token}: </span>}
+                {s.description}
+              </div>
+            ))}
+            {suggestions === TokenSuggestionsForEmpty && (
+              <div className="footer">
+                {localized(
+                  'Pro tip: Combine search terms with AND and OR to create complex queries.'
+                )}{' '}
+                <a
+                  onMouseDown={(e) => {
+                    AppEnv.windowEventHandler.openLink({
+                      href: LearnMoreURL,
+                      metaKey: e.metaKey,
+                    });
                     e.preventDefault();
                   }}
-                  className={`suggestion ${selectedIdx === idx ? 'selected' : ''}`}
-                  key={idx}
                 >
-                  {s.token && <span className="suggestion-token">{s.token}: </span>}
-                  {s.description}
-                </div>
-              ))}
-              {suggestions === TokenSuggestionsForEmpty && (
-                <div className="footer">
-                  {localized(
-                    'Pro tip: Combine search terms with AND and OR to create complex queries.'
-                  )}{' '}
-                  <a
-                    onMouseDown={e => {
-                      AppEnv.windowEventHandler.openLink({
-                        href: LearnMoreURL,
-                        metaKey: e.metaKey,
-                      });
-                      e.preventDefault();
-                    }}
-                  >
-                    {localized('Learn more')} &gt;
-                  </a>
-                </div>
-              )}
-            </div>
-          )}
+                  {localized('Learn more')} &gt;
+                </a>
+              </div>
+            )}
+          </div>
+        )}
       </KeyCommandsRegion>
     );
   }

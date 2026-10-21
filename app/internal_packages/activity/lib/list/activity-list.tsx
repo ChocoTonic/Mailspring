@@ -40,6 +40,9 @@ class ActivityList extends React.Component<
       document.activeElement.blur();
     }
     const aids = FocusedPerspectiveStore.sidebarAccountIds();
+    // The sheet reads the saved tab on mount; the action covers the already-mounted case.
+    AppEnv.savedState.activityTab = 'feed';
+    ActivityActions.selectTab('feed');
     Actions.focusMailboxPerspective(new ActivityMailboxPerspective(aids));
   };
 
@@ -77,7 +80,7 @@ class ActivityList extends React.Component<
       return <ActivityListEmptyState />;
     }
 
-    return this._groupActions(this.state.actions).map(group => (
+    return this._groupActions(this.state.actions).map((group) => (
       <ActivityListItemContainer
         key={`${group[0].messageId}-${group[0].timestamp}`}
         group={group}

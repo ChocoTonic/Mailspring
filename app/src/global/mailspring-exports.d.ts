@@ -32,7 +32,8 @@ export * from '../flux/stores/observable-list-data-source';
 export * from '../flux/models/mutable-query-subscription';
 
 // Database Objects
-export type DatabaseObjectRegistry = typeof import('../registries/database-object-registry').default;
+export type DatabaseObjectRegistry =
+  typeof import('../registries/database-object-registry').default;
 export const DatabaseObjectRegistry: DatabaseObjectRegistry;
 export * from '../flux/models/model';
 export type Attributes = typeof import('../flux/attributes');
@@ -70,6 +71,7 @@ export * from '../flux/tasks/change-labels-task';
 export * from '../flux/tasks/change-folder-task';
 export * from '../flux/tasks/change-unread-task';
 export * from '../flux/tasks/destroy-model-task';
+export * from '../flux/tasks/destroy-event-task';
 export * from '../flux/tasks/syncback-draft-task';
 export * from '../flux/tasks/change-starred-task';
 export * from '../flux/tasks/syncback-event-task';
@@ -77,6 +79,7 @@ export * from '../flux/tasks/destroy-category-task';
 export * from '../flux/tasks/syncback-category-task';
 export * from '../flux/tasks/syncback-metadata-task';
 export * from '../flux/tasks/get-message-rfc2822-task';
+export * from '../flux/tasks/get-many-rfc2822-task';
 export * from '../flux/tasks/expunge-all-in-folder-task';
 export * from '../flux/tasks/change-role-mapping-task';
 export * from '../flux/tasks/send-feature-usage-event-task';
@@ -134,12 +137,28 @@ export type MessageBodyProcessor = typeof import('../flux/stores/message-body-pr
 export const MessageBodyProcessor: MessageBodyProcessor;
 export type FocusedContactsStore = typeof import('../flux/stores/focused-contacts-store').default;
 export const FocusedContactsStore: FocusedContactsStore;
-export type FolderSyncProgressStore = typeof import('../flux/stores/folder-sync-progress-store').default;
+export type FolderSyncProgressStore =
+  typeof import('../flux/stores/folder-sync-progress-store').default;
 export const FolderSyncProgressStore: FolderSyncProgressStore;
-export type FocusedPerspectiveStore = typeof import('../flux/stores/focused-perspective-store').default;
+export type FocusedPerspectiveStore =
+  typeof import('../flux/stores/focused-perspective-store').default;
 export const FocusedPerspectiveStore: FocusedPerspectiveStore;
-export type SearchableComponentStore = typeof import('../flux/stores/searchable-component-store').default;
+export type SearchableComponentStore =
+  typeof import('../flux/stores/searchable-component-store').default;
 export const SearchableComponentStore: SearchableComponentStore;
+export type LocalModelStore = typeof import('../flux/stores/local-model-store').default;
+export const LocalModelStore: LocalModelStore;
+export type {
+  LocalAIAnswer,
+  LocalAIRequest,
+  LocalAIStatus,
+  LocalModelProvider,
+  LocalModelState,
+  LocalModelStatus,
+} from '../flux/stores/local-model-store';
+export const LocalModelPrompt: typeof import('../flux/stores/local-model-prompt');
+export const LocalModelSummaries: typeof import('../flux/stores/local-model-summaries');
+export type { MessageSummary, SummaryInput } from '../flux/stores/local-model-summaries';
 
 export type ServiceRegistry = typeof import('../registries/service-registry').default;
 export const ServiceRegistry: ServiceRegistry;
@@ -169,6 +188,7 @@ export const PropTypes: PropTypes;
 // React Components
 export type ComponentRegistry = typeof import('../registries/component-registry').default;
 export const ComponentRegistry: ComponentRegistry;
+export const SheetDepthContext: typeof import('../sheet-context').SheetDepthContext;
 
 // Utils
 export type Utils = typeof import('../flux/models/utils');
@@ -177,19 +197,42 @@ export type DOMUtils = typeof import('../dom-utils').default;
 export const DOMUtils: DOMUtils;
 export type DateUtils = typeof import('../date-utils').default;
 export const DateUtils: DateUtils;
+export type imapUtf7 = typeof import('../utils/imap-utf7').imapUtf7;
+export const imapUtf7: imapUtf7;
 
 export type CalendarUtils = typeof import('../calendar-utils');
 export const CalendarUtils: CalendarUtils;
 export { ICSParticipantStatus, ICSParticipant } from '../calendar-utils';
 
+export type CalendarDateUtils = typeof import('../calendar-date');
+export const CalendarDateUtils: CalendarDateUtils;
+export { CalendarDate } from '../calendar-date';
+
+export type ICSEventHelpers = typeof import('../ics-event-helpers');
+export const ICSEventHelpers: ICSEventHelpers;
+export {
+  CalendarConflict,
+  CreateEventOptions,
+  Occurrence,
+  UpdateTimesOptions,
+  RecurrenceExceptionResult,
+  RecurrenceInfo,
+} from '../ics-event-helpers';
+
 export type FsUtils = typeof import('../fs-utils');
 export const FsUtils: FsUtils;
 export type CanvasUtils = typeof import('../canvas-utils');
 export const CanvasUtils: CanvasUtils;
+export type DragDropTypes = typeof import('../drag-drop-types');
+export const DragDropTypes: DragDropTypes;
 export type RegExpUtils = typeof import('../regexp-utils').default;
 export const RegExpUtils: RegExpUtils;
 export type MenuHelpers = typeof import('../menu-helpers');
 export const MenuHelpers: MenuHelpers;
+export type EmlUtils = typeof import('../services/eml-utils');
+export const EmlUtils: EmlUtils;
+export type MboxUtils = typeof import('../services/mbox-utils');
+export const MboxUtils: MboxUtils;
 export type VirtualDOMUtils = typeof import('../virtual-dom-utils').default;
 export const VirtualDOMUtils: VirtualDOMUtils;
 export type Spellchecker = typeof import('../spellchecker').default;
@@ -217,6 +260,13 @@ export const QuotedHTMLTransformer: QuotedHTMLTransformer;
 export type InlineStyleTransformer = typeof import('../services/inline-style-transformer').default;
 export const InlineStyleTransformer: InlineStyleTransformer;
 export * from '../searchable-components/searchable-component-maker';
+
+// Composer Editor Plugin APIs
+export type GrammarCheckPluginAPI =
+  typeof import('../components/composer-editor/grammar-check-plugins').GrammarCheckPluginAPI;
+export const GrammarCheckPluginAPI: GrammarCheckPluginAPI;
+export type GrammarCheckStoreAPI =
+  typeof import('../components/composer-editor/grammar-check-plugins').GrammarCheckStoreAPI;
 
 // Errors
 export * from '../flux/errors';

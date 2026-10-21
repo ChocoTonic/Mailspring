@@ -2,11 +2,11 @@ import React, { Component, CSSProperties } from 'react';
 import { localized, Account } from 'mailspring-exports';
 import { RetinaImg, Flexbox, EditableList } from 'mailspring-component-kit';
 import classnames from 'classnames';
-import PropTypes from 'prop-types';
 
 interface PreferencesAccountListProps {
   accounts: Account[];
   selected: Account;
+  offlineAccountIds: string[];
   onAddAccount: () => void;
   onReorderAccount: (account: Account, oldIndex: number, newIndex: number) => void;
   onSelectAccount: (account: Account) => void;
@@ -14,15 +14,6 @@ interface PreferencesAccountListProps {
 }
 
 class PreferencesAccountList extends Component<PreferencesAccountListProps> {
-  static propTypes = {
-    accounts: PropTypes.array,
-    selected: PropTypes.object,
-    onAddAccount: PropTypes.func.isRequired,
-    onReorderAccount: PropTypes.func.isRequired,
-    onSelectAccount: PropTypes.func.isRequired,
-    onRemoveAccount: PropTypes.func.isRequired,
-  };
-
   _renderAccountStateIcon(account: Account) {
     if (account.syncState !== 'running') {
       return (
@@ -38,19 +29,40 @@ class PreferencesAccountList extends Component<PreferencesAccountListProps> {
     return null;
   }
 
+  _renderAccountStatus(account: Account) {
+    if (account.syncState === Account.SYNC_STATE_AUTH_FAILED) {
+      return <div className="account-status error">{localized('Cannot authenticate')}</div>;
+    }
+    if (account.hasSyncStateError()) {
+      return <div className="account-status error">{localized('Sync error')}</div>;
+    }
+    if (this.props.offlineAccountIds.includes(account.id)) {
+      return (
+        <div className="account-status offline">
+          {localized('Offline')} - {localized('Retrying...')}
+        </div>
+      );
+    }
+    return null;
+  }
+
   _renderAccount = (account: Account) => {
     const label = account.label;
     const accountSub = `${account.name || localized('No name provided')} <${account.emailAddress}>`;
     const syncError = account.hasSyncStateError();
-    let style: CSSProperties = {}
+    let style: CSSProperties = {};
     if (account.color) {
-      style = { borderLeftColor: account.color, borderLeftWidth: '8px', borderLeftStyle: 'solid' }
+      style = { borderLeftColor: account.color, borderLeftWidth: '8px', borderLeftStyle: 'solid' };
     } else {
-      style = { marginLeft: '8px' }
+      style = { marginLeft: '8px' };
     }
 
     return (
-      <div style={style} className={classnames({ account: true, 'sync-error': syncError })} key={account.id}>
+      <div
+        style={style}
+        className={classnames({ account: true, 'sync-error': syncError })}
+        key={account.id}
+      >
         <Flexbox direction="row" style={{ alignItems: 'middle' }}>
           <div style={{ textAlign: 'center' }}>
             <RetinaImg
@@ -71,6 +83,7 @@ class PreferencesAccountList extends Component<PreferencesAccountListProps> {
             <div className="account-subtext" dir="auto">
               {accountSub} ({account.displayProvider()})
             </div>
+            {this._renderAccountStatus(account)}
           </div>
         </Flexbox>
       </div>

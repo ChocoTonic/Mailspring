@@ -10,10 +10,7 @@ import {
 import MailspringStore from 'mailspring-store';
 
 import { PLUGIN_ID } from './send-reminders-constants';
-import {
-  updateReminderMetadata,
-  transferReminderMetadataFromDraftToThread,
-} from './send-reminders-utils';
+import { updateReminderMetadata } from './send-reminders-utils';
 
 class SendRemindersStore extends MailspringStore {
   _lastFocusedThread = null;
@@ -22,16 +19,15 @@ class SendRemindersStore extends MailspringStore {
   activate() {
     this._unsubscribers = [
       FocusedContentStore.listen(this._onFocusedContentChanged),
-      Actions.draftDeliverySucceeded.listen(this._onDraftDeliverySucceeded),
       DatabaseStore.listen(this._onDatabaseChanged),
     ];
   }
 
   deactivate() {
-    this._unsubscribers.forEach(unsub => unsub());
+    this._unsubscribers.forEach((unsub) => unsub());
   }
 
-  _sendReminderEmail = async (thread, sentHeaderMessageId) => {
+  _sendReminderEmail = async (thread: Thread, sentHeaderMessageId: string) => {
     const body = `
       <strong>Mailspring Reminder:</strong> This thread has been moved to the top of
       your inbox by Mailspring because no one has replied to your message.</p>
@@ -39,12 +35,6 @@ class SendRemindersStore extends MailspringStore {
 
     const draft = await DraftFactory.createDraftForResurfacing(thread, sentHeaderMessageId, body);
     Actions.queueTask(SendDraftTask.forSending(draft, { silent: true }));
-  };
-
-  _onDraftDeliverySucceeded = ({ headerMessageId, accountId }) => {
-    // when a draft is sent a thread may be created for it for the first time.
-    // Move the metadata from the message to the thread for much easier book-keeping.
-    transferReminderMetadataFromDraftToThread({ headerMessageId, accountId });
   };
 
   _onDatabaseChanged = ({ type, objects, objectClass }: DatabaseChangeRecord<Thread>) => {
@@ -56,14 +46,35 @@ class SendRemindersStore extends MailspringStore {
       return;
     }
 
+    // If threads with reminders were deleted, there's nothing to clean up — the
+    // metadata is gone with the thread. Just skip processing to avoid operating
+    // on deleted models.
+    if (type === 'unpersist') {
+      return;
+    }
+
     for (const thread of objects) {
       const metadata = thread.metadataForPluginId(PLUGIN_ID);
       if (!metadata || !metadata.expiration) {
         continue;
       }
 
-      // has a new message arrived on the thread? if so, clear the metadata completely
       const currentReplyTimestamp = new Date(thread.lastMessageReceivedTimestamp).getTime() / 1000;
+
+      // Metadata the sync engine promoted from a draft on send carries only
+      // {expiration, sentHeaderMessageId}. Record the reply baseline the first
+      // time we see it; comparing the missing field below would read as "a reply
+      // arrived" and silently discard the reminder.
+      if (metadata.lastReplyTimestamp === undefined) {
+        metadata.lastReplyTimestamp = currentReplyTimestamp;
+        metadata.shouldNotify = false;
+        if (type !== 'metadata-expiration') {
+          updateReminderMetadata(thread, metadata);
+          continue;
+        }
+      }
+
+      // has a new message arrived on the thread? if so, clear the metadata completely
       if (metadata.lastReplyTimestamp !== currentReplyTimestamp) {
         updateReminderMetadata(thread, {});
         continue;

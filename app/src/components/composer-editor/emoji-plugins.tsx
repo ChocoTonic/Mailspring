@@ -1,9 +1,15 @@
 import React from 'react';
-import NodeEmoji from 'node-emoji';
+import * as NodeEmoji from 'node-emoji';
 import { Actions } from 'mailspring-exports';
 import { Editor, Mark } from 'slate';
-import { Rule, ComposerEditorPlugin, ComposerEditorPluginTopLevelComponentProps } from './types';
+import {
+  Rule,
+  ComposerEditorPlugin,
+  ComposerEditorPluginTopLevelComponentProps,
+  ComposerEditorPluginToolbarComponentProps,
+} from './types';
 import EmojiToolbarPopover from './emoji-toolbar-popover';
+import { safeActiveMarks } from './toolbar-component-factories';
 
 let EmojiNameToImageTable = null;
 
@@ -19,16 +25,34 @@ export const EMOJI_TYPE = 'emoji';
 // The size of the list of floating emoji options
 const MAX_EMOJI_SUGGESTIONS = 6;
 
-/* Returns the official emoji names matching the provided text. */
+// Cache all emoji names for efficient autocomplete lookup
+let allEmojiNames: string[] | null = null;
+
+function getAllEmojiNames(): string[] {
+  if (!allEmojiNames) {
+    // node-emoji v2: search() returns { name, emoji } objects where `name` is the identifier.
+    allEmojiNames = NodeEmoji.search('')
+      .map((e) => e.name)
+      .sort();
+  }
+  return allEmojiNames;
+}
+
+/* Returns emoji names that start with the provided text (used by the typeahead). */
 export function getEmojiSuggestions(word: string) {
   const emojiOptions = [];
-  const emojiNames = Object.keys(NodeEmoji.emoji).sort();
+  const emojiNames = getAllEmojiNames();
   for (const emojiName of emojiNames) {
     if (word === emojiName.substring(0, word.length)) {
       emojiOptions.push(emojiName);
     }
   }
   return emojiOptions;
+}
+
+/* Returns emoji names containing the provided text anywhere (used by the toolbar popover). */
+export function searchEmojiNames(word: string) {
+  return getAllEmojiNames().filter((name) => name.includes(word));
 }
 
 export function getEmojiImagePath(emojiname: string) {
@@ -67,7 +91,7 @@ function FloatingEmojiPicker({ editor, value }: ComposerEditorPluginTopLevelComp
   if (!sel.rangeCount) return null;
   const range = sel.getRangeAt(0);
 
-  const emoji = value.activeMarks.find(i => i.type === EMOJI_TYPING_TYPE);
+  const emoji = safeActiveMarks(value).find((i) => i.type === EMOJI_TYPING_TYPE);
   if (!emoji) return null;
 
   const picked = emoji.data.get('picked');
@@ -79,16 +103,18 @@ function FloatingEmojiPicker({ editor, value }: ComposerEditorPluginTopLevelComp
 
   const relativePositionedParent = target.closest('.RichEditor-content') as HTMLElement;
   const intrinsicPos = relativePositionedParent.getBoundingClientRect();
-  const targetPos = target.getBoundingClientRect() as ClientRect;
-  const relativeParentW = (relativePositionedParent as any).width;
+  const targetRect = target.getBoundingClientRect();
+  const relativeParentW = relativePositionedParent.clientWidth;
 
-  if (targetPos.left + 150 > relativeParentW) {
-    targetPos.left = relativeParentW - 150;
+  // Convert to parent-relative coordinates before clamping to editor bounds
+  let targetLeft = targetRect.left - intrinsicPos.left;
+  if (targetLeft + 150 > relativeParentW) {
+    targetLeft = relativeParentW - 150;
   }
 
   const delta = {
-    top: targetPos.top + targetPos.height - intrinsicPos.top,
-    left: targetPos.left - intrinsicPos.left,
+    top: targetRect.top + targetRect.height - intrinsicPos.top,
+    left: targetLeft,
   };
 
   // Don't display all the selections - just display a few before/after the
@@ -105,10 +131,10 @@ function FloatingEmojiPicker({ editor, value }: ComposerEditorPluginTopLevelComp
       className="emoji-picker"
       style={{ position: 'absolute', left: delta.left, top: delta.top }}
     >
-      {displayedSuggestions.map(option => (
+      {displayedSuggestions.map((option) => (
         <button
           key={option}
-          onMouseDown={e => swapEmojiMarkFor(editor, emoji, option)}
+          onMouseDown={(e) => swapEmojiMarkFor(editor, emoji, option)}
           className={`btn btn-icon ${picked === option && 'emoji-option'}`}
         >
           <ImageBasedEmoji name={option} /> :{option}
@@ -176,7 +202,7 @@ const rules: Rule[] = [
         };
       }
     },
-    serialize(obj, children) {
+    serialize(obj: any, children: any) {
       if (obj.object === 'mark') {
         return renderMark({ mark: obj, children, targetIsHTML: true });
       } else if (obj.object === 'inline') {
@@ -203,7 +229,11 @@ export function swapEmojiMarkFor(editor: Editor, emoji: Mark, picked: string) {
   }
 }
 
-export function updateEmojiMark(editor: Editor, existing, { typed, suggestions, picked }) {
+export function updateEmojiMark(
+  editor: Editor,
+  existing: Mark,
+  { typed, suggestions, picked }: { typed: string; suggestions: string[]; picked: string }
+) {
   editor.moveAnchorBackward(typed.length);
   editor.removeMark(existing);
   editor.addMark({
@@ -215,9 +245,12 @@ export function updateEmojiMark(editor: Editor, existing, { typed, suggestions, 
 
 function onKeyDown(event: React.KeyboardEvent, editor: Editor, next: () => void) {
   if ([' ', 'Return', 'Enter'].includes(event.key)) {
-    const emoji = editor.value.marks.find(i => i.type === EMOJI_TYPING_TYPE);
+    const emoji = editor.value.marks.find((i) => i.type === EMOJI_TYPING_TYPE);
     if (!emoji) return next();
-    const picked = emoji.data.get('picked');
+    const suggestions = emoji.data.get('suggestions');
+    // If there's exactly one suggestion, auto-accept it on Enter/Space regardless of
+    // whether the user has explicitly selected it with arrow keys.
+    const picked = emoji.data.get('picked') || (suggestions?.length === 1 ? suggestions[0] : null);
     swapEmojiMarkFor(editor, emoji, picked);
     if (picked) {
       event.preventDefault();
@@ -225,7 +258,7 @@ function onKeyDown(event: React.KeyboardEvent, editor: Editor, next: () => void)
     }
   } else if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
     const dir = event.key.includes('Down') ? 1 : -1;
-    const emoji = editor.value.marks.find(i => i.type === EMOJI_TYPING_TYPE);
+    const emoji = editor.value.marks.find((i) => i.type === EMOJI_TYPING_TYPE);
     if (!emoji) return next();
     const suggestions = emoji.data.get('suggestions');
     const typed = emoji.data.get('typed');
@@ -240,7 +273,7 @@ function onKeyDown(event: React.KeyboardEvent, editor: Editor, next: () => void)
 }
 
 function onKeyUp(event: React.KeyboardEvent, editor: Editor, next: () => void) {
-  const emoji = editor.value.marks.find(i => i.type === EMOJI_TYPING_TYPE);
+  const emoji = editor.value.marks.find((i) => i.type === EMOJI_TYPING_TYPE);
   if (!emoji) {
     const { offset, key } = editor.value.selection.focus;
     const focusText = editor.value.focusText;
@@ -257,7 +290,7 @@ function onKeyUp(event: React.KeyboardEvent, editor: Editor, next: () => void) {
     let typed = '';
     const { offset, key } = editor.value.selection.focus;
     const focusText = editor.value.focusText;
-    if (focusText.key === key) {
+    if (focusText && focusText.key === key) {
       typed = focusText.text.substr(focusText.text.lastIndexOf(':', offset), offset);
     }
     if (typed.length > 10 || !typed.startsWith(':')) {
@@ -281,8 +314,8 @@ function onKeyUp(event: React.KeyboardEvent, editor: Editor, next: () => void) {
   return next();
 }
 
-const ToolbarEmojiButton = ({ value, editor }) => {
-  const onInsertEmoji = name => {
+const ToolbarEmojiButton = ({ value, editor }: ComposerEditorPluginToolbarComponentProps) => {
+  const onInsertEmoji = (name) => {
     const inline = {
       object: 'inline',
       type: EMOJI_TYPE,
@@ -290,16 +323,13 @@ const ToolbarEmojiButton = ({ value, editor }) => {
     };
     Actions.closePopover();
     setTimeout(() => {
-      editor
-        .insertInline(inline)
-        .moveToStartOfNextText()
-        .focus();
+      editor.insertInline(inline).moveToStartOfNextText().focus();
     }, 100);
   };
 
   return (
     <button
-      onClick={e => {
+      onClick={(e) => {
         Actions.openPopover(<EmojiToolbarPopover onInsertEmoji={onInsertEmoji} />, {
           originRect: (e.target as HTMLElement).getBoundingClientRect(),
           direction: 'up',

@@ -1,24 +1,31 @@
-import _ from 'underscore';
+import { imapUtf7 } from 'mailspring-exports';
 
-import _str from 'underscore.string';
+import fs from 'fs';
+import _str from '../../../src/string-utils';
 import { OutlineViewItem } from 'mailspring-component-kit';
 import {
   MailboxPerspective,
   FocusedPerspectiveStore,
   SyncbackCategoryTask,
   DestroyCategoryTask,
+  GetManyRFC2822Task,
   CategoryStore,
   Actions,
   RegExpUtils,
+  DragDropTypes,
   localized,
+  TaskQueue,
+  DatabaseStore,
+  Thread,
+  TaskFactory,
 } from 'mailspring-exports';
 
 import * as SidebarActions from './sidebar-actions';
 import { ISidebarItem } from './types';
 
-const idForCategories = categories => _.pluck(categories, 'id').join('-');
+const idForCategories = (categories: { id: string }[]) => categories.map((c) => c.id).join('-');
 
-const countForItem = function (perspective) {
+const countForItem = function (perspective: MailboxPerspective) {
   const unreadCountEnabled = AppEnv.config.get('core.workspace.showUnreadForAllCategories');
   if (perspective.isInbox() || unreadCountEnabled) {
     return perspective.unreadCount();
@@ -26,9 +33,10 @@ const countForItem = function (perspective) {
   return 0;
 };
 
-const isItemSelected = perspective => FocusedPerspectiveStore.current().isEqual(perspective);
+const isItemSelected = (perspective: MailboxPerspective) =>
+  FocusedPerspectiveStore.current().isEqual(perspective);
 
-const isItemCollapsed = function (id) {
+const isItemCollapsed = function (id: string) {
   if (AppEnv.savedState.sidebarKeysCollapsed[id] !== undefined) {
     return AppEnv.savedState.sidebarKeysCollapsed[id];
   } else {
@@ -36,14 +44,14 @@ const isItemCollapsed = function (id) {
   }
 };
 
-const toggleItemCollapsed = function (item) {
+const toggleItemCollapsed = function (item: ISidebarItem) {
   if (!(item.children.length > 0)) {
     return;
   }
   SidebarActions.setKeyCollapsed(item.id, !isItemCollapsed(item.id));
 };
 
-const onDeleteItem = function (item) {
+const onDeleteItem = function (item: ISidebarItem) {
   if (item.deleted === true) {
     return;
   }
@@ -74,7 +82,172 @@ const onDeleteItem = function (item) {
   );
 };
 
-const onEditItem = function (item, value) {
+const EXCLUDED_EXPORT_ROLES = new Set(['drafts', 'starred', 'unread']);
+
+const onExportFolder = function (item: ISidebarItem) {
+  const category = item.perspective.category();
+  if (!category) {
+    return;
+  }
+
+  AppEnv.showOpenDialog(
+    {
+      title: localized('Export folder as .eml files'),
+      buttonLabel: localized('Export'),
+      properties: ['openDirectory', 'createDirectory'],
+    },
+    (selected: string[]) => {
+      if (!selected || selected.length === 0) {
+        return;
+      }
+      const outputDir = selected[0];
+      Actions.queueTask(
+        new GetManyRFC2822Task({
+          accountId: category.accountId,
+          folderId: category.id,
+          folderPath: category.path,
+          outputDir,
+        })
+      );
+    }
+  );
+};
+
+const onExportMboxFolder = function (item: ISidebarItem) {
+  const category = item.perspective.category();
+  if (!category) {
+    return;
+  }
+
+  const defaultName = `${(category.displayName || 'folder').replace(/[/?<>\\:*|"]/g, '_')}.mbox`;
+
+  AppEnv.showSaveDialog(
+    {
+      title: localized('Export folder as .mbox file'),
+      buttonLabel: localized('Export'),
+      defaultPath: defaultName,
+      filters: [{ name: 'mbox', extensions: ['mbox'] }],
+    },
+    (mboxPath: string) => {
+      if (!mboxPath) {
+        return;
+      }
+
+      // Two exports feeding one destination would fight over the staging
+      // directory and interleave appends into the same file.
+      const running = TaskQueue.findTasks(GetManyRFC2822Task, (t: GetManyRFC2822Task) => {
+        return t.format === 'mbox' && t.mboxPath === mboxPath;
+      });
+      if (running.length > 0) {
+        AppEnv.showErrorDialog(localized('An mbox export to this file is already in progress.'));
+        return;
+      }
+
+      // The sync engine writes one .eml file per message into a staging
+      // directory beside the destination file (same volume as the export the
+      // user sized, and discoverable if something goes wrong); the mbox
+      // export runner incrementally assembles it into the mbox as the export
+      // progresses — including across app restarts. The staging path carries a
+      // per-export token so a new export never shares a directory (or working
+      // file) with an earlier, still-lingering completed task for the same
+      // destination — that collision would let the old task finalize against
+      // the new export's staging and overwrite the destination.
+      const token = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const stagingDir = `${mboxPath}.${token}.partial`;
+      fs.mkdirSync(stagingDir, { recursive: true });
+
+      Actions.queueTask(
+        new GetManyRFC2822Task({
+          accountId: category.accountId,
+          folderId: category.id,
+          folderPath: category.path,
+          outputDir: stagingDir,
+          format: 'mbox',
+          mboxPath,
+        })
+      );
+    }
+  );
+};
+
+const onMarkAllAsRead = function (item: ISidebarItem) {
+  const category = item.perspective.category();
+  if (!category) {
+    return;
+  }
+
+  const matchers = [
+    Thread.attributes.categories.containsAny([category.id]),
+    Thread.attributes.unread.equal(true),
+  ];
+  if (!['spam', 'trash'].includes(category.role)) {
+    matchers.push(Thread.attributes.inAllMail.equal(true));
+  }
+
+  DatabaseStore.findAll<Thread>(Thread)
+    .where(matchers)
+    .then((threads) => {
+      if (threads.length === 0) {
+        return;
+      }
+      Actions.queueTask(
+        TaskFactory.taskForSettingUnread({
+          threads,
+          unread: false,
+          source: 'Sidebar Context Menu: Mark All As Read',
+          canBeUndone: true,
+        })
+      );
+    })
+    .catch(AppEnv.reportError);
+};
+
+function detectFolderSeparator(accountId: string): string {
+  // Check category paths for known prefixes — most reliable signal
+  for (const cat of CategoryStore.categories(accountId)) {
+    const catPath = cat.path;
+    for (const prefix of ['INBOX', '[Gmail]', '[Mailspring]', 'Mailspring']) {
+      if (catPath.startsWith(prefix) && catPath.length > prefix.length) {
+        const ch = catPath[prefix.length];
+        if (ch === '.' || ch === '/' || ch === '\\') return ch;
+      }
+    }
+  }
+
+  return '/';
+}
+
+export function createCategory(accountId: string, name: string, parentCategory?: { path: string }) {
+  if (!name) {
+    return;
+  }
+
+  let fullName: string;
+  if (parentCategory) {
+    const separator = detectFolderSeparator(accountId);
+    const decodedPath = imapUtf7.decode(parentCategory.path);
+    fullName = decodedPath + separator + name;
+  } else {
+    fullName = name;
+  }
+
+  Actions.queueTask(
+    SyncbackCategoryTask.forCreating({
+      name: fullName,
+      accountId,
+    })
+  );
+}
+
+const onCreateChild = function (item: ISidebarItem, childName: string) {
+  const category = item.perspective.category();
+  if (!category) {
+    return;
+  }
+  createCategory(category.accountId, childName, category);
+};
+
+const onEditItem = function (item: ISidebarItem, value: string) {
   let newDisplayName;
   if (!value) {
     return;
@@ -112,7 +285,11 @@ const onEditItem = function (item, value) {
 };
 
 export default class SidebarItem {
-  static forPerspective(id, perspective, opts: Partial<ISidebarItem> = {}): ISidebarItem {
+  static forPerspective(
+    id: string,
+    perspective: MailboxPerspective,
+    opts: Partial<ISidebarItem> = {}
+  ): ISidebarItem {
     let counterStyle;
     if (perspective.isInbox()) {
       counterStyle = OutlineViewItem.CounterStyles.Alt;
@@ -134,10 +311,13 @@ export default class SidebarItem {
         counterStyle,
         onDelete: opts.deletable ? onDeleteItem : undefined,
         onEdited: opts.editable ? onEditItem : undefined,
+        onExport: opts.exportable ? onExportFolder : undefined,
+        onExportMbox: opts.exportable ? onExportMboxFolder : undefined,
+        onCreateChild: opts.editable ? onCreateChild : undefined,
         onCollapseToggled: toggleItemCollapsed,
 
         onDrop(item, event) {
-          const jsonString = event.dataTransfer.getData('mailspring-threads-data');
+          const jsonString = event.dataTransfer.getData(DragDropTypes.ThreadsDragType);
           let jsonData = null;
           try {
             jsonData = JSON.parse(jsonString);
@@ -153,7 +333,7 @@ export default class SidebarItem {
         shouldAcceptDrop(item, event) {
           const target = item.perspective;
           const current = FocusedPerspectiveStore.current();
-          if (!event.dataTransfer.types.includes('mailspring-threads-data')) {
+          if (!event.dataTransfer.types.includes(DragDropTypes.ThreadsDragType)) {
             return false;
           }
           if (target.isEqual(current)) {
@@ -162,14 +342,11 @@ export default class SidebarItem {
 
           // We can't inspect the drag payload until drop, so we use a dataTransfer
           // type to encode the account IDs of threads currently being dragged.
-          const accountsType = event.dataTransfer.types.find(t =>
-            t.startsWith('mailspring-accounts=')
-          );
-          const accountIds = (accountsType || '').replace('mailspring-accounts=', '').split(',');
+          const accountIds = DragDropTypes.accountIdsForDragTypes(event.dataTransfer.types);
           return target.canReceiveThreadsFromAccountIds(accountIds);
         },
 
-        onSelect(item) {
+        onSelect(item: ISidebarItem) {
           Actions.focusMailboxPerspective(item.perspective);
         },
       },
@@ -190,11 +367,18 @@ export default class SidebarItem {
     if (opts.editable == null) {
       opts.editable = true;
     }
+    if (opts.exportable == null) {
+      const role = categories[0] != null ? categories[0].role : null;
+      opts.exportable = !role || !EXCLUDED_EXPORT_ROLES.has(role);
+    }
+    if (opts.onMarkAllAsRead == null && perspective.category()) {
+      opts.onMarkAllAsRead = onMarkAllAsRead;
+    }
     opts.contextMenuLabel = contextMenuLabel;
     return this.forPerspective(id, perspective, opts);
   }
 
-  static forStarred(accountIds, opts: Partial<ISidebarItem> = {}) {
+  static forStarred(accountIds: string[], opts: Partial<ISidebarItem> = {}) {
     const perspective = MailboxPerspective.forStarred(accountIds);
     let id = 'Starred';
     if (opts.name) {
@@ -203,8 +387,8 @@ export default class SidebarItem {
     return this.forPerspective(id, perspective, opts);
   }
 
-  static forUnread(accountIds, opts: Partial<ISidebarItem> = {}) {
-    let categories = accountIds.map(accId => {
+  static forUnread(accountIds: string[], opts: Partial<ISidebarItem> = {}) {
+    let categories = accountIds.map((accId) => {
       return CategoryStore.getCategoryByRole(accId, 'inbox');
     });
 
@@ -213,7 +397,7 @@ export default class SidebarItem {
     // changes, it'll trigger the exact moment an account is added to the
     // config. However, the API has not yet come back with the list of
     // `categories` for that account.
-    categories = _.compact(categories);
+    categories = categories.filter(Boolean);
 
     const perspective = MailboxPerspective.forUnread(categories);
     let id = 'Unread';
@@ -223,7 +407,7 @@ export default class SidebarItem {
     return this.forPerspective(id, perspective, opts);
   }
 
-  static forDrafts(accountIds, opts: Partial<ISidebarItem> = {}) {
+  static forDrafts(accountIds: string[], opts: Partial<ISidebarItem> = {}) {
     const perspective = MailboxPerspective.forDrafts(accountIds);
     const id = `Drafts-${opts.name}`;
     return this.forPerspective(id, perspective, opts);

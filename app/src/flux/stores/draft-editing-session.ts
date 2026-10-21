@@ -1,5 +1,6 @@
+import * as Immutable from 'immutable';
 import MailspringStore from 'mailspring-store';
-import { Editor, Value, Block } from 'slate';
+import { Editor, Value, Block, Text } from 'slate';
 
 import RegExpUtils from '../../regexp-utils';
 import { localized } from '../../intl';
@@ -12,6 +13,7 @@ import ContactStore from './contact-store';
 import DatabaseStore from './database-store';
 import { AccountStore } from './account-store';
 import { DraftChangeSet } from './draft-change-set';
+import { DatabaseChangeRecord } from './database-change-record';
 import { DestroyDraftTask } from '../tasks/destroy-draft-task';
 import { Composer as ComposerExtensionRegistry } from '../../registries/extension-registry';
 import QuotedHTMLTransformer from '../../services/quoted-html-transformer';
@@ -54,22 +56,28 @@ function hotwireDraftBodyState(draft: any, session: DraftEditingSession): Messag
 
   draft.__bodyPropDescriptor = {
     configurable: true,
-    get: function() {
+    get: function () {
       if (_bodyHTMLValue === null) {
         _bodyHTMLValue = convertToHTML(_bodyEditorValue);
       }
       return _bodyHTMLValue;
     },
-    set: function(inHTML) {
+    set: function (inHTML) {
       if (_bodyHTMLValue === inHTML) return;
 
       _bodyHTMLValue = inHTML;
 
-      if (session._mountedEditor) {
+      // Capture the editor reference immediately. Between this check and the first use of
+      // the editor below (moveToStartOfDocument), convertFromHTML is called. In rare cases
+      // the composer can unmount during that call — or during the Slate change operations
+      // themselves — setting session._mountedEditor to null. Using a local snapshot prevents
+      // the null-reference crash at the point of use.
+      const mountedEditor = session._mountedEditor;
+      if (mountedEditor) {
         const inHTMLEditorValue = convertFromHTML(inHTML);
         try {
           // try to apply the new value to the existing document to preserve undo history.
-          let edits = session._mountedEditor.moveToStartOfDocument();
+          let edits = mountedEditor.moveToStartOfDocument();
 
           // remove all but the very first node in the document
           const [first, ...rest] = edits.value.document.nodes.toArray();
@@ -79,15 +87,21 @@ function hotwireDraftBodyState(draft: any, session: DraftEditingSession): Messag
             }
           }
 
+          // Note: an empty block must still contain a Text node — a block with zero
+          // children leaves the document in a state Slate can't compute a selection
+          // range over (moveToRangeOfDocument crashes on Point.moveToStartOfNode).
           edits = edits
-            .replaceNodeByKey(first.key, Block.create({ type: 'div' }))
+            .replaceNodeByKey(
+              first.key,
+              Block.create({ type: 'div', nodes: Immutable.List([Text.create('')]) })
+            )
             .moveToRangeOfDocument()
             .insertFragment(inHTMLEditorValue.document);
 
           // occasionally inserting the fragment adds a new line at the beginning of the value.
           // It's unclear why this happens and it appears to be specific to replies.
           const firstBlock = edits.value.document.getBlocks().first();
-          if (firstBlock.text === '') {
+          if (firstBlock && firstBlock.text === '') {
             edits = edits.removeNodeByKey(firstBlock.key);
           }
 
@@ -106,7 +120,9 @@ function hotwireDraftBodyState(draft: any, session: DraftEditingSession): Messag
           // equivalent document of the same shape.
           AppEnv.reportError(new Error(`Unable to insert fragment into existing document.`), {
             underlyingError: err,
-            existingSlateShape: convertToShapeWithoutContent(session._mountedEditor.value),
+            existingSlateShape: mountedEditor
+              ? convertToShapeWithoutContent(mountedEditor.value)
+              : null,
             incomingSlateShape: convertToShapeWithoutContent(inHTMLEditorValue),
           });
           _bodyEditorValue = inHTMLEditorValue;
@@ -120,13 +136,13 @@ function hotwireDraftBodyState(draft: any, session: DraftEditingSession): Messag
 
   draft.__bodyEditorValuePropDescriptor = {
     configurable: true,
-    get: function() {
+    get: function () {
       if (_bodyEditorValue === null) {
         _bodyEditorValue = convertFromHTML(_bodyHTMLValue);
       }
       return _bodyEditorValue;
     },
-    set: function(inValue) {
+    set: function (inValue) {
       if (_bodyEditorValue === inValue) return;
       _bodyHTMLValue = null;
       _bodyEditorValue = inValue;
@@ -185,7 +201,7 @@ export class DraftEditingSession extends MailspringStore {
 
   headerMessageId: string;
   changes = new DraftChangeSet({
-    onAddChanges: changes => this.changeSetApplyChanges(changes),
+    onAddChanges: (changes) => this.changeSetApplyChanges(changes),
     onCommit: () => this.changeSetCommit(), // for specs
   });
 
@@ -208,7 +224,7 @@ export class DraftEditingSession extends MailspringStore {
         draft: true,
       })
         .include(Message.attributes.body)
-        .then(draft => {
+        .then((draft) => {
           if (this._destroyed) {
             console.warn(`Draft loaded but session has been torn down.`);
             return;
@@ -245,10 +261,27 @@ export class DraftEditingSession extends MailspringStore {
     this._mountedEditor = editor;
   }
 
+  // ensureCorrectAccount cannot send from an address that matches no account or
+  // alias, eg: a draft synced from another client, or an alias since removed.
+  hasSendableFromAddress() {
+    const from = this._draft?.from[0];
+    return !!(from && AccountStore.accountForEmail(from.email));
+  }
+
+  static unsendableFromAddressMessage() {
+    return localized(
+      'The From address is not one of your accounts or aliases. Choose a From address and try again.'
+    );
+  }
+
   validateDraftForSending() {
     const miscWarnings = [];
     const miscErrors = [];
     const hasAttachment = this._draft.files && this._draft.files.length > 0;
+
+    if (!this.hasSendableFromAddress()) {
+      miscErrors.push(DraftEditingSession.unsendableFromAddressMessage());
+    }
 
     if (this._draft.subject.length === 0) {
       miscWarnings.push(localized('The subject field is blank.'));
@@ -278,7 +311,6 @@ export class DraftEditingSession extends MailspringStore {
     return { miscErrors, miscWarnings };
   }
 
-
   validateDraftRecipients() {
     const recipientWarnings = [];
     const recipientErrors = [];
@@ -294,7 +326,12 @@ export class DraftEditingSession extends MailspringStore {
         );
       }
       const name = contact.fullName();
-      if (name && name.length && name !== contact.email && !this.checkRecipientInWarningBlacklist(contact.email)) {
+      if (
+        name &&
+        name.length &&
+        name !== contact.email &&
+        !this.checkRecipientInWarningBlacklist(contact.email)
+      ) {
         allNames.push(name.toLowerCase()); // ben gotow
         allNames.push(...name.toLowerCase().split(' ')); // ben, gotow
         allNames.push(...name.toLowerCase().split('-')); // anne-marie => anne, marie
@@ -315,7 +352,7 @@ export class DraftEditingSession extends MailspringStore {
     }
 
     if (recipientErrors.length > 0) {
-      return { errors: recipientErrors, warnings: recipientWarnings };
+      return { recipientErrors: recipientErrors, recipientWarnings: recipientWarnings };
     }
 
     let cleaned = QuotedHTMLTransformer.removeQuotedHTML(this._draft.body.trim());
@@ -330,13 +367,14 @@ export class DraftEditingSession extends MailspringStore {
     if (!unnamedRecipientPresent) {
       // https://www.regexpal.com/?fam=99334
       // note: requires that the name is capitalized, to avoid catching "Hey guys"
-      const englishSalutationPhrases = /(?:[y|Y]o|[h|H]ey|[h|H]i|[M|m]orning|[A|a]fternoon|[E|e]vening|[D|d]ear){1} ([A-Z][A-Za-zÀ-ÿ. -]+)[!_—,.\n\r< ]/;
+      const englishSalutationPhrases =
+        /(?:[y|Y]o|[h|H]ey|[h|H]i|[M|m]orning|[A|a]fternoon|[E|e]vening|[D|d]ear){1} ([A-Z][A-Za-zÀ-ÿ. -]+)[!_—,.\n\r< ]/;
       const match = englishSalutationPhrases.exec(cleaned);
       if (match) {
         let salutation = (match[1] || '').toLowerCase();
         if (salutation.endsWith('-')) salutation = salutation.substr(0, salutation.length - 1);
 
-        if (!allNames.find(n => n === salutation || (n.length > 1 && salutation.includes(n)))) {
+        if (!allNames.find((n) => n === salutation || (n.length > 1 && salutation.includes(n)))) {
           recipientWarnings.push(
             localized(
               `The message is addressed to a name that doesn't appear to be a recipient ("%@")`,
@@ -352,19 +390,18 @@ export class DraftEditingSession extends MailspringStore {
 
   addRecipientsToWarningBlacklist() {
     const allRecipients = [...this._draft.to, ...this._draft.cc, ...this._draft.bcc];
-    const allRecipientEmails = allRecipients.map(contact =>  contact.email);
-    let blacklist = JSON.parse(localStorage.getItem("recipientWarningBlacklist"));
+    const allRecipientEmails = allRecipients.map((contact) => contact.email);
+    let blacklist = JSON.parse(localStorage.getItem('recipientWarningBlacklist'));
     if (blacklist === null) blacklist = [];
     blacklist.push(...allRecipientEmails);
-    localStorage.setItem("recipientWarningBlacklist", JSON.stringify(blacklist));
+    localStorage.setItem('recipientWarningBlacklist', JSON.stringify(blacklist));
   }
-  
-  checkRecipientInWarningBlacklist(email) {
-    const blacklist = JSON.parse(localStorage.getItem("recipientWarningBlacklist"));
+
+  checkRecipientInWarningBlacklist(email: string) {
+    const blacklist = JSON.parse(localStorage.getItem('recipientWarningBlacklist'));
     if (blacklist && blacklist.includes(email)) return true;
     return false;
   }
-
 
   // This function makes sure the draft is attached to a valid account, and changes
   // it's accountId if the from address does not match the account for the from
@@ -372,7 +409,11 @@ export class DraftEditingSession extends MailspringStore {
   //
   async ensureCorrectAccount() {
     const draft = this.draft();
-    const account = AccountStore.accountForEmail(draft.from[0].email);
+    const from = draft.from[0];
+    if (!from) {
+      throw new Error('DraftEditingSession::ensureCorrectAccount - draft has no from address.');
+    }
+    const account = AccountStore.accountForEmail(from.email);
     if (!account) {
       throw new Error(
         'DraftEditingSession::ensureCorrectAccount - you can only send drafts from a configured account.'
@@ -399,6 +440,9 @@ export class DraftEditingSession extends MailspringStore {
           files: draft.files,
           replyTo: draft.replyTo,
           subject: draft.subject,
+          // Carry over plugin metadata (open/link tracking, send-later) so toggles the
+          // user enabled aren't silently reset when the draft moves between accounts.
+          pluginMetadata: draft.pluginMetadata,
           headerMessageId: draft.headerMessageId,
           accountId: account.id,
           unread: false,
@@ -422,7 +466,7 @@ export class DraftEditingSession extends MailspringStore {
     return this;
   }
 
-  _onDraftChanged = change => {
+  _onDraftChanged = (change) => {
     if (change === undefined || change.type !== 'persist') {
       return;
     }
@@ -441,7 +485,7 @@ export class DraftEditingSession extends MailspringStore {
     }
 
     const nextDraft = change.objects
-      .filter(obj => obj.headerMessageId === this._draft.headerMessageId)
+      .filter((obj) => obj.headerMessageId === this._draft.headerMessageId)
       .pop();
 
     if (!nextDraft) {
@@ -456,7 +500,7 @@ export class DraftEditingSession extends MailspringStore {
     let changed = false;
     for (const [key] of Object.entries(Message.attributes)) {
       if (key === 'headerMessageId') continue;
-      if (nextDraft[key] === undefined) continue;
+      if (nextDraft[key] === undefined || nextDraft[key] === null) continue;
       if (lockedFields.includes(key)) continue;
       if (this._draft[key] === nextDraft[key]) continue;
 
@@ -481,7 +525,7 @@ export class DraftEditingSession extends MailspringStore {
     await TaskQueue.waitForPerformLocal(task);
   }
 
-  changeSetApplyChanges = changes => {
+  changeSetApplyChanges = (changes: Record<string, unknown>) => {
     if (this._destroyed) {
       return;
     }
@@ -493,7 +537,10 @@ export class DraftEditingSession extends MailspringStore {
 
     for (const [key, val] of Object.entries(changes)) {
       if (key.startsWith(MetadataChangePrefix)) {
-        this._draft.directlyAttachMetadata(key.split(MetadataChangePrefix).pop(), val);
+        this._draft.directlyAttachMetadata(
+          key.split(MetadataChangePrefix).pop(),
+          val as Record<string, any>
+        );
       } else {
         this._draft[key] = val;
       }

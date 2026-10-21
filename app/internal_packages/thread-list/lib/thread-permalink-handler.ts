@@ -25,19 +25,22 @@ const _findCorrespondingThread = (
   { subject, lastDate, date }: MailspringLinkParams,
   dateEpsilon = DATE_EPSILON
 ) => {
+  const fromUnix = (seconds: number) => new Date(seconds * 1000);
   const dateClause = date
     ? new Matcher.And([
-        Thread.attributes.firstMessageTimestamp.lessThan(date + dateEpsilon),
-        Thread.attributes.firstMessageTimestamp.greaterThan(date - dateEpsilon),
+        Thread.attributes.firstMessageTimestamp.lessThan(fromUnix(date + dateEpsilon)),
+        Thread.attributes.firstMessageTimestamp.greaterThan(fromUnix(date - dateEpsilon)),
       ])
     : new Matcher.Or([
         new Matcher.And([
-          Thread.attributes.lastMessageSentTimestamp.lessThan(lastDate + dateEpsilon),
-          Thread.attributes.lastMessageSentTimestamp.greaterThan(lastDate - dateEpsilon),
+          Thread.attributes.lastMessageSentTimestamp.lessThan(fromUnix(lastDate + dateEpsilon)),
+          Thread.attributes.lastMessageSentTimestamp.greaterThan(fromUnix(lastDate - dateEpsilon)),
         ]),
         new Matcher.And([
-          Thread.attributes.lastMessageReceivedTimestamp.lessThan(lastDate + dateEpsilon),
-          Thread.attributes.lastMessageReceivedTimestamp.greaterThan(lastDate - dateEpsilon),
+          Thread.attributes.lastMessageReceivedTimestamp.lessThan(fromUnix(lastDate + dateEpsilon)),
+          Thread.attributes.lastMessageReceivedTimestamp.greaterThan(
+            fromUnix(lastDate - dateEpsilon)
+          ),
         ]),
       ]);
 
@@ -47,17 +50,17 @@ const _findCorrespondingThread = (
   ]);
 };
 
-const _onOpenThreadFromWeb = (event, mailspringUrl: string) => {
+const _onOpenThreadFromWeb = (event: Electron.IpcRendererEvent, mailspringUrl: string) => {
   const params = _parseOpenThreadUrl(mailspringUrl);
 
   _findCorrespondingThread(params)
-    .then(thread => {
+    .then((thread) => {
       if (!thread) {
         throw new Error('Thread not found');
       }
       Actions.popoutThread(thread);
     })
-    .catch(error => {
+    .catch((error) => {
       AppEnv.reportError(error);
       AppEnv.showErrorDialog(
         localized(`The thread %@ does not exist in your mailbox!`, params.subject)

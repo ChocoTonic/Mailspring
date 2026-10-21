@@ -1,10 +1,14 @@
 import path from 'path';
+import NativeNotifications from '../native-notifications';
 
 class SoundRegistry {
   private _sounds = {};
 
-  playSound(name: string) {
+  async playSound(name: string) {
     if (AppEnv.inSpecMode()) {
+      return;
+    }
+    if (await NativeNotifications.doNotDisturb()) {
       return;
     }
     const src = this._sounds[name];
@@ -26,7 +30,11 @@ class SoundRegistry {
       a.src = path.join.apply(this, args);
     }
     a.autoplay = true;
-    a.play();
+    // play() rejects on every call when the platform can't decode the file
+    // (MAILSPRING-CLIENT-HF). A missed sound effect isn't worth reporting.
+    a.play().catch((err) => {
+      console.warn(`SoundRegistry: Could not play ${name}: ${err.message}`);
+    });
   }
 
   register(name: string | { [key: string]: string[] }, rpath?: string) {
