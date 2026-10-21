@@ -1,0 +1,27 @@
+{
+  "repository": "ChocoTonic/Mailspring-Sync",
+  "tag": "emudhra-security-20261021",
+  "revision": "f003261db0f4745161313ad000f6f4b5f22649ac",
+  "assets": {
+    "linux-x64": {
+      "name": "mailsync-linux-x64.tar.gz",
+      "sha256": "1c9f915fd21d5413894d2e2618335524c03c0a35e163802495030b59364c43f6"
+    },
+    "linux-arm64": {
+      "name": "mailsync-linux-arm64.tar.gz",
+      "sha256": "65cde3ff8fbb303695857b9b445c651e4faa308814e4ce93b3fcd66df7e840db"
+    },
+    "darwin-x64": {
+      "name": "mailsync-darwin-universal.tar.gz",
+      "sha256": "859e577010ccf59b72d5b9477aec4cc82829a9088a9c1689cedda0cf92d9a1cd"
+    },
+    "darwin-arm64": {
+      "name": "mailsync-darwin-universal.tar.gz",
+      "sha256": "859e577010ccf59b72d5b9477aec4cc82829a9088a9c1689cedda0cf92d9a1cd"
+    },
+    "win32-x64": {
+      "name": "mailsync-win32-ia32.tar.gz",
+      "sha256": "fb5ce46d66852b376fbca2aadbc807a060c63dcd41aed928f8769aedabdc68ff"
+    }
+  }
+}

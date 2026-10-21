@@ -4,7 +4,17 @@
 
 Mailspring's UI is open source (GPLv3) and written in TypeScript with [Electron](https://github.com/atom/electron) and [React](https://facebook.github.io/react/) - it's built on a plugin architecture and was designed to be easy to extend. Check out [CONTRIBUTING.md](https://github.com/Foundry376/Mailspring/blob/master/CONTRIBUTING.md) to get started!
 
-Mailspring's sync engine is spawned by the Electron application and runs locally on your computer. [It is open source (GPLv3) and written in C++ and C.](https://github.com/Foundry376/Mailspring-Sync) For convenience, however, when you set up your development environment, Mailspring uses the latest version of the sync engine we've shipped for your platform so you don't need to pull sources or install its compile-time dependencies.
+Mailspring's sync engine is spawned by the Electron application and runs locally on your computer. [It is open source (GPLv3) and written in C++ and C.](https://github.com/ChocoTonic/Mailspring-Sync) Installation always downloads the patched fork release pinned in `mailsync-release.json` and verifies its SHA-256 before extraction, including in checkouts containing native sources. Native developers can rebuild that source afterwards. The installed app retains the downloaded native revision and archive digest in `app/mailsync-release.json`.
+
+This fork requires macOS 13.5 or later, matching the patched native sync engine's deployment target and exceeding the [Electron 44 platform minimum](https://www.electronjs.org/blog/electron-44-0). Its native HTTPS protection also requires the supported system libcurl; older unsupported backends fail closed.
+
+On macOS, native HTTPS requests refuse HTTPS proxy URLs because that backend cannot check the proxy certificate before sending proxy credentials. HTTP and SOCKS proxies remain supported.
+
+Native mail authentication rejects DIGEST-MD5 on every platform. Accounts using that mechanism must use a supported server authentication method; the client does not fall back to a weaker method when rejecting it.
+
+Build and install this fork to use these changes. The upstream desktop downloads linked below do not include this fork's native security update.
+
+The verified native Linux binaries and bundled libraries require glibc 2.34 or later on x64 and glibc 2.38 or later on ARM64. These requirements come from their ELF version dependencies. Ubuntu 22.04 ARM64 cannot run that ARM64 binary; Ubuntu 24.04 provides a suitable glibc.
 
 ![Mailspring Screenshot](https://github.com/Foundry376/Mailspring/raw/master/screenshots/hero_graphic_mac%402x.png)
 
