@@ -18,7 +18,12 @@
     "node": true,
     "jasmine": true
   },
-  "plugins": ["react", "import", "jsx-a11y", "prettier"],
+  "plugins": [
+    "react",
+    "import",
+    "jsx-a11y",
+    "prettier"
+  ],
   "extends": [
     "eslint:recommended",
     "plugin:@typescript-eslint/eslint-recommended",
@@ -62,7 +67,17 @@
     "@typescript-eslint/array-type": 0,
     "@typescript-eslint/explicit-module-boundary-types": 0,
     "@typescript-eslint/no-empty-function": 0,
-    "@typescript-eslint/ban-types": "warn"
+    "@typescript-eslint/no-unsafe-function-type": "warn",
+    "@typescript-eslint/no-wrapper-object-types": "warn",
+    "@typescript-eslint/no-empty-object-type": "warn",
+    "@typescript-eslint/no-require-imports": 0,
+    "@typescript-eslint/no-unused-expressions": [
+      "error",
+      {
+        "allowShortCircuit": true,
+        "allowTernary": true
+      }
+    ]
   },
   "settings": {
     "import/core-modules": [

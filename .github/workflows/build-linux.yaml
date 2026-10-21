@@ -45,7 +45,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20' # LTS; change to '22' if you’re ready for current
+          node-version: '24.22.1' # LTS; change to '22' if you’re ready for current
           cache: 'npm' # enables npm cache based on lockfile
 
       - name: Install Dependencies

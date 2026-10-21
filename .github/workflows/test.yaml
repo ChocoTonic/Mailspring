@@ -2,7 +2,7 @@ name: Test
 
 on:
   push:
-    branches: [master]
+    branches: [master, "security/**"]
   pull_request:
 
 jobs:
@@ -30,7 +30,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24.22.1'
           cache: 'npm'
 
       - name: Install dependencies
