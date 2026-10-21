@@ -285,7 +285,7 @@ const RegExpUtils = {
 
   emojiRegex() {
     if (!createEmojiRegex) {
-      createEmojiRegex = require('emoji-regex');
+      createEmojiRegex = require('emoji-regex').default;
     }
     return createEmojiRegex();
   },
