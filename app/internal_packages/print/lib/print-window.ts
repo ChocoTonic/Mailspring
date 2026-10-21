@@ -3,7 +3,7 @@ import fs from 'fs';
 import { pathToFileURL } from 'url';
 
 import { localized } from 'mailspring-exports';
-import { escapeHTML } from 'underscore.string';
+import { escapeHTML } from '../../../src/string-utils';
 import { developerToolsAvailable } from '../../../src/developer-tools';
 
 const { app, BrowserWindow, dialog } = require('@electron/remote');

@@ -1,7 +1,7 @@
 import { imapUtf7 } from 'mailspring-exports';
 
 import fs from 'fs';
-import _str from 'underscore.string';
+import _str from '../../../src/string-utils';
 import { OutlineViewItem } from 'mailspring-component-kit';
 import {
   MailboxPerspective,

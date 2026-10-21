@@ -1,5 +1,5 @@
 /* eslint global-require: 0 */
-import _str from 'underscore.string';
+import _str from '../../string-utils';
 import { Model, AttributeValues } from './model';
 import * as Attributes from '../attributes';
 import * as Utils from './utils';

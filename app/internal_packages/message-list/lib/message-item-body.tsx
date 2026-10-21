@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { escapeHTML } from 'underscore.string';
+import { escapeHTML } from '../../../src/string-utils';
 
 import React from 'react';
 import {

@@ -1,4 +1,4 @@
-import _str from 'underscore.string';
+import _str from '../../string-utils';
 import MailspringStore from 'mailspring-store';
 import * as Actions from '../actions';
 import { Message } from '../models/message';

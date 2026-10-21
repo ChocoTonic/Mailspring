@@ -1,6 +1,6 @@
 import React from 'react';
 import _ from 'underscore';
-import _str from 'underscore.string';
+import _str from '../../../../src/string-utils';
 import { ConfigLike, ConfigSchemaLike } from '../types';
 
 /*
