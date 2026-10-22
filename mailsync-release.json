@@ -5,23 +5,28 @@
   "assets": {
     "linux-x64": {
       "name": "mailsync-linux-x64.tar.gz",
-      "sha256": "1c9f915fd21d5413894d2e2618335524c03c0a35e163802495030b59364c43f6"
+      "sha256": "1c9f915fd21d5413894d2e2618335524c03c0a35e163802495030b59364c43f6",
+      "executableSha256": "fdf59006c9c25c754984ed4bd16aaeb426ef9075fe1ec12c8c46910fb3cc6526"
     },
     "linux-arm64": {
       "name": "mailsync-linux-arm64.tar.gz",
-      "sha256": "65cde3ff8fbb303695857b9b445c651e4faa308814e4ce93b3fcd66df7e840db"
+      "sha256": "65cde3ff8fbb303695857b9b445c651e4faa308814e4ce93b3fcd66df7e840db",
+      "executableSha256": "4bed4d6335339870edcdfc2c7a5f32d043e8cd3af6a31aa2897b6b974407667b"
     },
     "darwin-x64": {
       "name": "mailsync-darwin-universal.tar.gz",
-      "sha256": "859e577010ccf59b72d5b9477aec4cc82829a9088a9c1689cedda0cf92d9a1cd"
+      "sha256": "859e577010ccf59b72d5b9477aec4cc82829a9088a9c1689cedda0cf92d9a1cd",
+      "executableSha256": "4cb8d648af0113b5a7d16af72186b893010df2a5bd38b203c3ea88ce35244167"
     },
     "darwin-arm64": {
       "name": "mailsync-darwin-universal.tar.gz",
-      "sha256": "859e577010ccf59b72d5b9477aec4cc82829a9088a9c1689cedda0cf92d9a1cd"
+      "sha256": "859e577010ccf59b72d5b9477aec4cc82829a9088a9c1689cedda0cf92d9a1cd",
+      "executableSha256": "4cb8d648af0113b5a7d16af72186b893010df2a5bd38b203c3ea88ce35244167"
     },
     "win32-x64": {
       "name": "mailsync-win32-ia32.tar.gz",
-      "sha256": "fb5ce46d66852b376fbca2aadbc807a060c63dcd41aed928f8769aedabdc68ff"
+      "sha256": "fb5ce46d66852b376fbca2aadbc807a060c63dcd41aed928f8769aedabdc68ff",
+      "executableSha256": "5d92fdfdc84c51d0318cd469bdf869828d21533a27e982387dfe2eaff0d7e7e7"
     }
   }
 }

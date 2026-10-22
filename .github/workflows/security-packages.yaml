@@ -1,0 +1,72 @@
+name: Build security fork packages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - os: windows-2022
+            platform: win32
+            arch: x64
+          - os: macos-26
+            platform: darwin
+            arch: arm64
+          - os: macos-26-intel
+            platform: darwin
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y autoconf automake build-essential clang cmake fakeroot \
+            libc-ares-dev libctemplate-dev libcurl4-openssl-dev libglib2.0-dev libicu-dev \
+            libsasl2-dev libsasl2-modules libsasl2-modules-gssapi-mit libsecret-1-dev \
+            libssl-dev libnss3 libnss3-dev libtidy-dev libtool libxext-dev libxkbfile-dev \
+            libxml2-dev libxtst-dev pkg-config rpm uuid-dev xvfb
+          if [ '${{ matrix.arch }}' = x64 ]; then
+            sudo apt-get install -y clang-15
+            echo 'CC=clang-15' >> "$GITHUB_ENV"
+            echo 'CXX=clang++-15' >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+          cache: npm
+
+      - name: Install dependencies and verified native release
+        run: npm ci
+
+      - name: Build unsigned portable app
+        run: npm run build -- --skip-installers
+
+      - name: Verify packaged source and native runtime
+        run: node scripts/verify-security-package.js
+
+      - name: Upload verified package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: mailspring-security-${{ matrix.platform }}-${{ matrix.arch }}
+          path: app/dist/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6

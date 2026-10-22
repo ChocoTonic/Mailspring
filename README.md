@@ -14,6 +14,8 @@ Native mail authentication rejects DIGEST-MD5 on every platform. Accounts using 
 
 Build and install this fork to use these changes. The upstream desktop downloads linked below do not include this fork's native security update.
 
+This security fork uses manual updates from [its GitHub releases](https://github.com/ChocoTonic/Mailspring/releases). Background update checks do not contact the upstream installer feed, which could replace the pinned native security changes. Check for Updates opens the fork releases page. Fork packages are unsigned unless a release explicitly states otherwise.
+
 The verified native Linux binaries and bundled libraries require glibc 2.34 or later on x64 and glibc 2.38 or later on ARM64. These requirements come from their ELF version dependencies. Ubuntu 22.04 ARM64 cannot run that ARM64 binary; Ubuntu 24.04 provides a suitable glibc.
 
 ![Mailspring Screenshot](https://github.com/Foundry376/Mailspring/raw/master/screenshots/hero_graphic_mac%402x.png)

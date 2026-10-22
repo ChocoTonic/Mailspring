@@ -1,5 +1,6 @@
 {
   "name": "mailspring",
+  "securityFork": true,
   "productName": "Mailspring",
   "desktopName": "Mailspring.desktop",
   "version": "1.26.0",

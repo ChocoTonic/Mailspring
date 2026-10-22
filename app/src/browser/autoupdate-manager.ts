@@ -1,5 +1,5 @@
 /* eslint global-require: 0*/
-import { dialog, nativeImage } from 'electron';
+import { dialog, nativeImage, shell } from 'electron';
 import { EventEmitter } from 'events';
 import path from 'path';
 import os from 'os';
@@ -16,6 +16,7 @@ const NoUpdateAvailableState = 'no-update-available';
 const UnsupportedState = 'unsupported';
 const ErrorState = 'error';
 const preferredChannel = 'stable';
+const forkReleasesURL = 'https://github.com/ChocoTonic/Mailspring/releases';
 
 export default class AutoUpdateManager extends EventEmitter {
   state = IdleState;
@@ -70,7 +71,15 @@ export default class AutoUpdateManager extends EventEmitter {
     }
   };
 
+  usesForkUpdates() {
+    return require('../../package.json').securityFork === true;
+  }
+
   setupAutoUpdater() {
+    if (this.usesForkUpdates()) {
+      this.setState(UnsupportedState);
+      return;
+    }
     if (process.platform === 'win32') {
       const Impl = require('./autoupdate-impl-win32').default;
       autoUpdater = new Impl();
@@ -163,6 +172,11 @@ export default class AutoUpdateManager extends EventEmitter {
   }
 
   check({ hidePopups }: { hidePopups?: boolean } = {}) {
+    if (this.usesForkUpdates()) {
+      this.setState(UnsupportedState);
+      if (!hidePopups) shell.openExternal(forkReleasesURL);
+      return;
+    }
     this.updateFeedURL();
     if (!hidePopups) {
       autoUpdater.once('update-not-available', this.onUpdateNotAvailable);
@@ -172,6 +186,10 @@ export default class AutoUpdateManager extends EventEmitter {
   }
 
   install() {
+    if (this.usesForkUpdates()) {
+      shell.openExternal(forkReleasesURL);
+      return;
+    }
     autoUpdater.quitAndInstall();
   }
 
