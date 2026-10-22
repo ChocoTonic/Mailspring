@@ -62,11 +62,19 @@ jobs:
       - name: Verify packaged source and native runtime
         run: node scripts/verify-security-package.js
 
+      - name: Preserve executable permissions and symlinks
+        shell: bash
+        run: |
+          name=mailspring
+          if [ '${{ matrix.platform }}' != linux ]; then name=Mailspring; fi
+          tar -C app/dist -czf app/dist/mailspring-security-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz \
+            "$name-${{ matrix.platform }}-${{ matrix.arch }}" security-package-verification.json
+
       - name: Upload verified package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: mailspring-security-${{ matrix.platform }}-${{ matrix.arch }}
-          path: app/dist/
+          path: app/dist/*.tar.gz
           if-no-files-found: error
           retention-days: 30
           compression-level: 6
